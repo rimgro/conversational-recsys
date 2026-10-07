@@ -1,5 +1,0 @@
-indexes/
-tests/
-.pytest_cache/
-__pycache__/
-requirements-dev.txt

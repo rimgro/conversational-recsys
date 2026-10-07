@@ -1,13 +1,20 @@
 # BM25 service
 
-HTTP API for lexical candidate search over `tracks_meta`. Needs only Docker.
+HTTP API for lexical candidate search over `tracks_meta`. Python 3.10+.
+
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
 
 ## Build indexes
 
-Put `tracks_meta.jsonl` in `../data`, then:
+Point `--input` at `tracks_meta.jsonl`, `tracks_meta.parquet` or a folder of `tracks_meta-*.parquet` shards:
 
 ```bash
-docker compose run --rm build-indexes
+python build_index.py --input ../data/tracks_meta.jsonl --field m4a_genres_full --out indexes/genres
+python build_index.py --input ../data/tracks_meta.jsonl --field m4a_tags_full --out indexes/tags
 ```
 
 Each index is a folder in `indexes/`; its name is the `index` value in requests.
@@ -17,13 +24,13 @@ Add one with `build_index.py --field <column> ... --out indexes/<name>` (see its
 ## Run
 
 ```bash
-docker compose up --build
+BM25_INDEXES_DIR=indexes uvicorn app:app --port 8000
 ```
 
 - API page: http://localhost:8000/docs
 - Health and loaded indexes: http://localhost:8000/health
 
-Indexes are read once at startup: after rebuilding, `docker compose restart bm25`.
+Indexes are read once at startup: after rebuilding, restart the service.
 
 ## API
 
@@ -45,5 +52,5 @@ Indexes are read once at startup: after rebuilding, `docker compose restart bm25
 
 | Variable | Meaning |
 |---|---|
-| `BM25_INDEXES_DIR` | Folder with indexes (`/indexes` in the container). |
+| `BM25_INDEXES_DIR` | Folder with indexes. |
 | `BM25_API_KEY` | If set, requests need header `X-API-Key`. Empty = no auth. |
