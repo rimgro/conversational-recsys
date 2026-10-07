@@ -78,7 +78,6 @@ MOOD_WORDS: Dict[str, str] = {
 _ARTIST_CUES = {"like", "by", "from", "similar", "as", "love", "loves", "как", "типа", "похож", "похожее"}
 _GENDERS = {"female": "f", "woman": "f", "girl": "f", "male": "m", "man": "m", "boy": "m"}
 NEGATIONS_ALL = NEGATIONS | NEGATIONS_RU
-_DECADE_TAG_RE = re.compile(r"[0-9]0s")
 
 
 @dataclass
@@ -254,8 +253,8 @@ class RuleSummarizer(BaseSummarizer):
             countries=list(state["countries"]),
             languages=list(state["languages"]),
             years=list(state["years"]),
-            # эпохи из профиля не берём: «слушает музыку с 2010 года» — это не вкус
-            user_tags=[t for t in info_state["include"] if not _DECADE_TAG_RE.fullmatch(t)],
+            # из профиля не берём числа и коды: «слушает с 2012 года», «en 99%» — это не вкус
+            user_tags=[t for t in info_state["include"] if len(t) > 2 and not any(ch.isdigit() for ch in t)],
             user_attrs={**self._user_attrs(request.user_info), **request.user_attrs},
             source="rule",
         )
