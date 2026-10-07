@@ -1,0 +1,1 @@
+artifacts/lancedb.zip filter=lfs diff=lfs merge=lfs -text
