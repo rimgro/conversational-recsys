@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -62,7 +63,7 @@ class Pipeline:
 
         # 2. кандидаты
         t0 = time.perf_counter()
-        candidates: Dict[str, List[Candidate]] = {r.name: r.search(ctx) for r in self.retrievers}
+        candidates = self._candidates(ctx)
         t["2_candidates"] = time.perf_counter() - t0
 
         # 3. RRF + фильтры + дедуп
@@ -95,6 +96,17 @@ class Pipeline:
         if debug:
             dbg.update(profile=profile, candidates=candidates, fused=fused, features=ranked)
         return Response(text=text, tracks=tracks, summary=summary, debug=dbg)
+
+    def _candidates(self, ctx: Context) -> Dict[str, List[Candidate]]:
+        """Удалённые источники (HTTP к VPS) опрашиваются параллельно, пока считаются локальные."""
+        remote = [r for r in self.retrievers if getattr(r, "remote", False)]
+        if not remote:
+            return {r.name: r.search(ctx) for r in self.retrievers}
+        with ThreadPoolExecutor(max_workers=len(remote)) as pool:
+            futures = {r.name: pool.submit(r.search, ctx) for r in remote}
+            local = {r.name: r.search(ctx) for r in self.retrievers if r.name not in futures}
+            return {r.name: futures[r.name].result() if r.name in futures else local[r.name]
+                    for r in self.retrievers}
 
     def _to_tracks(self, ranked: pd.DataFrame, ctx: Context) -> List[RankedTrack]:
         out = []

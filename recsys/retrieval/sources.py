@@ -296,10 +296,10 @@ def build_retrievers(cfg: Dict[str, Any], catalog: Catalog,
         k = c.get("top_k", 200)
         kind = kinds[name]
         if kind == "bm25_api":
-            out.append(BM25APIRetriever(name, catalog, CandgenClient.from_config(cfg, c), index=c.get("index", "genres"),
+            out.append(BM25APIRetriever(name, catalog, CandgenClient.from_config(cfg, "bm25", c), index=c.get("index", "genres"),
                                         top_k=k, query=c.get("query", "tags")))
         elif kind == "hnsw_api":
-            out.append(HNSWAPIRetriever(name, catalog, CandgenClient.from_config(cfg, c), index=c.get("index", "audio"),
+            out.append(HNSWAPIRetriever(name, catalog, CandgenClient.from_config(cfg, "hnsw", c), index=c.get("index", "audio"),
                                         top_k=k))
         elif kind == "bm25":
             out.append(BM25Retriever(catalog, bm25_index, top_k=k))

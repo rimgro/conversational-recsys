@@ -8,6 +8,7 @@ data:
   seed: 42
   cache_dir: data/cache        # кэш каталога crs (parquet + эмбеддинги .npy)
   use_cache: true
+  load_embeddings: true        # эмбеддинги MuQ в память (нужны локальному audio); с VPS не нужны
 
   synthetic:
     n_tracks: 5000
@@ -35,11 +36,16 @@ summarizer:
   type: rule                   # rule (заглушка) | llm (фолбэк на rule)
   min_tag_count: 2
 
-candgen:                       # образ 1: кандгены BM25 + HNSW по HTTP (candgen/RUN.md); включается configs/candgen.yaml
-  url: http://localhost:8000
-  timeout: 3.0                 # секунды; при ошибке источник пропускается
-  api_key: ${CANDGEN_API_KEY}  # заголовок X-API-Key; пусто = без ключа
-  headers: {}                  # доп. заголовки (например, для DataSphere Node); ${VAR} берётся из окружения
+candgen:                       # кандгены BM25 и HNSW на VPS (deploy/README.md, API: docs/candgen_api.md); включается configs/candgen.yaml
+  timeout: 5.0                 # секунды на запрос; при ошибке источник пропускается
+  retries: 1                   # повтор при обрыве соединения (таймаут не повторяется)
+  headers: {}                  # доп. заголовки ко всем запросам; ${VAR} берётся из окружения
+  bm25:
+    url: http://localhost:8001
+    api_key: ${BM25_API_KEY}   # заголовок X-API-Key; пусто = без ключа
+  hnsw:
+    url: http://localhost:8002
+    api_key: ${HNSW_API_KEY}
 
 retrieval:                     # enabled: false выключает источник; type по умолчанию = имя (recsys/retrieval/sources.py)
   bm25:     {enabled: true, top_k: 200, k1: 1.2, b: 0.75}
@@ -50,7 +56,7 @@ retrieval:                     # enabled: false выключает источн�
   audio:    {enabled: true, top_k: 200}                        # эмбеддинги MuQ
   popular:  {enabled: true, top_k: 100}
   hnsw:     {enabled: false, top_k: 200}                       # ЗАГЛУШКА текстового семантического поиска
-  # удалённые кандгены из образа 1 (recsys/retrieval/remote.py)
+  # кандгены на VPS (recsys/retrieval/remote.py), адреса в candgen.bm25 / candgen.hnsw
   bm25_genres: {enabled: false, type: bm25_api, index: genres, query: tags, top_k: 200}
   bm25_tags:   {enabled: false, type: bm25_api, index: tags, query: tags, top_k: 200}
   bm25_title:  {enabled: false, type: bm25_api, index: title, query: title, top_k: 50}

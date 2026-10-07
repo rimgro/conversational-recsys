@@ -31,9 +31,11 @@ _RAW_COLUMNS = ["m4a_id", "m4a_artist", "m4a_song", "m4a_album", "artist", "titl
 
 # ---------------------------------------------------------------- каталог
 
-def read_tracks_meta(path: str, with_lyrics: bool = False) -> pd.DataFrame:
+def read_tracks_meta(path: str, with_lyrics: bool = False, with_embeddings: bool = True) -> pd.DataFrame:
     """Читает только нужные колонки (в файле их ~100, включая длинные тексты)."""
     wanted = _RAW_COLUMNS + EXTRA_COLUMNS + (["lyrics"] if with_lyrics else [])
+    if not with_embeddings:
+        wanted.remove("muq_embedding")
     present = set(pq.read_schema(path).names)
     return pq.read_table(path, columns=[c for c in wanted if c in present]).to_pandas()
 

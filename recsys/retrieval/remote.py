@@ -1,20 +1,21 @@
-"""Кандидаты из образа 1 (candgen/: BM25 + HNSW) по HTTP.
+"""Кандидаты из кандгенов на VPS (bm25/ и hnsw/, два отдельных сервиса) по HTTP.
 
-Кандгены обучаются и живут отдельно; здесь только predict-вызовы. Тот же интерфейс, что у
-локальных источников: search(ctx) -> [Candidate]. Ошибка сети / сервиса -> пустой список,
-предупреждение и last_error (пайплайн не падает, остальные источники работают).
+Кандгены обучаются и живут отдельно; здесь только predict-вызовы по контракту docs/candgen_api.md.
+Тот же интерфейс, что у локальных источников: search(ctx) -> [Candidate]. Ошибка сети / сервиса ->
+пустой список, предупреждение и last_error (пайплайн не падает, остальные источники работают).
 
-  bm25_api   POST /bm25/search  слова из саммари -> индекс genres / tags / title
-  hnsw_api   POST /hnsw/search  треки истории с весами (+ лайки, артисты-сиды) -> индекс audio
+  bm25_api   POST /bm25/search  слова из саммари -> индекс genres / tags / title     (candgen.bm25)
+  hnsw_api   POST /hnsw/search  треки истории с весами (+ лайки, артисты-сиды) -> audio   (candgen.hnsw)
 
-Конфиг: раздел candgen (url, timeout, api_key, headers) + источники с type: bm25_api | hnsw_api.
-Значения вида ${VAR} и ${VAR:-по умолчанию} берутся из переменных окружения.
+Конфиг: раздел candgen (timeout, retries, headers; bm25 / hnsw: url, api_key) + источники с
+type: bm25_api | hnsw_api. Значения вида ${VAR} и ${VAR:-по умолчанию} берутся из переменных окружения.
 """
 from __future__ import annotations
 
 import json
 import os
 import re
+import socket
 import urllib.error
 import urllib.request
 import warnings
@@ -27,10 +28,11 @@ from recsys.retrieval.sources import BaseRetriever, TitleRetriever, taste_track_
 from recsys.schemas import Candidate, Context
 
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+_CLIENT_KEYS = ("url", "timeout", "retries", "api_key", "headers")
 
 
 def expand_env(value: Any) -> Any:
-    """'${CANDGEN_API_KEY}' -> значение переменной (пусто, если не задана); '${X:-d}' -> d, если X пуста."""
+    """'${BM25_API_KEY}' -> значение переменной (пусто, если не задана); '${X:-d}' -> d, если X пуста."""
     if isinstance(value, str):
         return _ENV_RE.sub(lambda m: os.environ.get(m.group(1)) or (m.group(2) or ""), value)
     return value
@@ -40,13 +42,23 @@ class CandgenError(RuntimeError):
     pass
 
 
-class CandgenClient:
-    """POST JSON в сервис кандгенов. Заголовок X-API-Key, если задан api_key; любые доп. заголовки."""
+def _is_timeout(e: BaseException) -> bool:
+    return isinstance(e, (socket.timeout, TimeoutError)) or isinstance(getattr(e, "reason", None),
+                                                                       (socket.timeout, TimeoutError))
 
-    def __init__(self, url: str, timeout: float = 3.0, api_key: Optional[str] = None,
-                 headers: Optional[Dict[str, str]] = None):
+
+class CandgenClient:
+    """JSON по HTTP к одному сервису. X-API-Key, если задан api_key; любые доп. заголовки.
+
+    retries: сколько раз повторить при обрыве соединения (сервис перезапускается, сеть моргнула).
+    Таймаут и ответы с HTTP-ошибкой не повторяются, чтобы не умножать задержку.
+    """
+
+    def __init__(self, url: str, timeout: float = 5.0, api_key: Optional[str] = None,
+                 headers: Optional[Dict[str, str]] = None, retries: int = 1):
         self.url = expand_env(url).rstrip("/")
         self.timeout = timeout
+        self.retries = retries
         self.headers = {"Content-Type": "application/json"}
         self.headers.update({k: expand_env(v) for k, v in (headers or {}).items() if expand_env(v)})
         key = expand_env(api_key) if api_key else ""
@@ -54,27 +66,51 @@ class CandgenClient:
             self.headers["X-API-Key"] = key
 
     def post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        req = urllib.request.Request(self.url + path, data=json.dumps(payload).encode("utf8"),
-                                     headers=self.headers, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                return json.loads(r.read().decode("utf8"))
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf8", "replace")[:300]
-            raise CandgenError(f"{path}: HTTP {e.code} {detail}") from None
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
-            raise CandgenError(f"{path}: {e}") from None
+        return self._call(path, json.dumps(payload).encode("utf8"))
+
+    def get(self, path: str) -> Dict[str, Any]:
+        return self._call(path, None)
+
+    def _call(self, path: str, data: Optional[bytes]) -> Dict[str, Any]:
+        err: Optional[BaseException] = None
+        for _ in range(self.retries + 1):
+            req = urllib.request.Request(self.url + path, data=data, headers=self.headers,
+                                         method="GET" if data is None else "POST")
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                    raw = r.read()
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode("utf8", "replace")[:300]
+                raise CandgenError(f"{self.url}{path}: HTTP {e.code} {detail}") from None
+            except (urllib.error.URLError, OSError) as e:
+                err = e
+                if _is_timeout(e):
+                    break
+                continue
+            try:
+                return json.loads(raw.decode("utf8"))
+            except ValueError as e:
+                raise CandgenError(f"{self.url}{path}: ответ не JSON ({e})") from None
+        raise CandgenError(f"{self.url}{path}: {err}")
 
     @classmethod
-    def from_config(cls, cfg: Dict[str, Any], source_cfg: Optional[Dict[str, Any]] = None) -> "CandgenClient":
-        c = {**cfg.get("candgen", {}), **{k: v for k, v in (source_cfg or {}).items()
-                                          if k in ("url", "timeout", "api_key", "headers")}}
-        return cls(c.get("url", "http://localhost:8000"), timeout=c.get("timeout", 3.0),
-                   api_key=c.get("api_key"), headers=c.get("headers"))
+    def from_config(cls, cfg: Dict[str, Any], service: str,
+                    source_cfg: Optional[Dict[str, Any]] = None) -> "CandgenClient":
+        """Общие настройки candgen + candgen.<service> (bm25 | hnsw) + ключи из самого источника."""
+        common = cfg.get("candgen", {})
+        c = {**{k: v for k, v in common.items() if k in _CLIENT_KEYS}, **common.get(service, {}),
+             **{k: v for k, v in (source_cfg or {}).items() if k in _CLIENT_KEYS}}
+        if not c.get("url"):
+            raise ValueError(f"candgen.{service}.url не задан")
+        return cls(c["url"], timeout=c.get("timeout", 5.0), api_key=c.get("api_key"),
+                   headers=c.get("headers"), retries=c.get("retries", 1))
 
 
 class _RemoteRetriever(BaseRetriever):
+    remote = True        # Pipeline опрашивает удалённые источники параллельно
+    service = ""         # раздел candgen.<service> в конфиге
     path = ""
+    health_path = ""
 
     def __init__(self, name: str, catalog: Catalog, client: CandgenClient, index: str, top_k: int = 200):
         super().__init__(catalog, top_k)
@@ -104,10 +140,22 @@ class _RemoteRetriever(BaseRetriever):
         return [Candidate(track_id=str(t), source=self.name, score=float(s), rank=r)
                 for r, (t, s) in enumerate(zip(resp.get("ids", []), resp.get("scores", [])), start=1)]
 
+    def health(self) -> Dict[str, Any]:
+        """Состояние сервиса и версия нужного индекса (для ноутбука и логов)."""
+        try:
+            resp = self.client.get(self.health_path)
+        except CandgenError as e:
+            return {"url": self.client.url, "status": "unavailable", "error": str(e)}
+        idx = resp.get("indexes", {}).get(self.index)
+        return {"url": self.client.url, "status": resp.get("status") if idx else f"нет индекса {self.index!r}",
+                "index_version": (idx or {}).get("index_version"), "n_items": (idx or {}).get("n_items")}
+
 
 class BM25APIRetriever(_RemoteRetriever):
     """query: 'tags' — теги, страна/эпоха и латинские слова саммари; 'title' — артист + название (с транслитом)."""
+    service = "bm25"
     path = "/bm25/search"
+    health_path = "/health"
     MAX_WORDS = 256
 
     def __init__(self, name: str, catalog: Catalog, client: CandgenClient, index: str = "genres",
@@ -135,7 +183,9 @@ class BM25APIRetriever(_RemoteRetriever):
 
 
 class HNSWAPIRetriever(_RemoteRetriever):
+    service = "hnsw"
     path = "/hnsw/search"
+    health_path = "/hnsw/health"
     MAX_TRACKS = 10_000
 
     def payload(self, ctx: Context, k: int) -> Optional[Dict[str, Any]]:
