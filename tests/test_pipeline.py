@@ -6,7 +6,7 @@ from recsys.schemas import Message, Request
 
 
 def test_pipeline_runs_and_respects_filters(cfg, data):
-    pipe = Pipeline.from_config(cfg, data.catalog)
+    pipe = Pipeline.from_config(deep_update(cfg, {"fusion": {"exclude_listened": True}}), data.catalog)
     req = data.requests[0]
     resp = pipe.run(req, debug=True)
     assert 0 < len(resp.tracks) <= cfg["ranker"]["top_k"]

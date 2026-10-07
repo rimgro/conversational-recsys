@@ -22,22 +22,25 @@ class Message:
 
 @dataclass
 class HistoryItem:
+    """Уникальный трек из истории: сколько раз слушали и когда последний раз (unix-время)."""
     track_id: str
     count: float = 1.0
-    timestamp: Optional[str] = None
+    timestamp: Optional[int] = None
 
 
 @dataclass
 class Request:
     dialog: List[Message] = field(default_factory=list)
     history: List[HistoryItem] = field(default_factory=list)
-    user_info: str = ""
+    user_info: str = ""                                   # текстовый профиль (user_profile в датасете)
+    user_attrs: Dict[str, Any] = field(default_factory=dict)  # age, gender, country (user_demographics)
     user_id: Optional[str] = None
     request_id: Optional[str] = None
     shown_ids: List[str] = field(default_factory=list)    # уже показаны в этом диалоге
     liked_ids: List[str] = field(default_factory=list)
     skipped_ids: List[str] = field(default_factory=list)
     target_ids: List[str] = field(default_factory=list)   # только для офлайн-оценки
+    meta: Dict[str, Any] = field(default_factory=dict)    # query_family, is_new, split, ...
 
     @property
     def user_messages(self) -> List[str]:
@@ -64,12 +67,14 @@ class Request:
             dialog=dialog,
             history=history,
             user_info=str(d.get("user_info", "") or ""),
+            user_attrs=dict(d.get("user_attrs", {}) or {}),
             user_id=None if d.get("user_id") is None else str(d["user_id"]),
             request_id=d.get("request_id", d.get("dialog_id")),
             shown_ids=[str(x) for x in d.get("shown_ids", [])],
             liked_ids=[str(x) for x in d.get("liked_ids", [])],
             skipped_ids=[str(x) for x in d.get("skipped_ids", [])],
             target_ids=[str(x) for x in d.get("target_ids", d.get("target_track_ids", []))],
+            meta=dict(d.get("meta", {}) or {}),
         )
 
     @classmethod
@@ -118,6 +123,7 @@ class UserProfile:
     tag_weights: Dict[str, float] = field(default_factory=dict)
     genre_weights: Dict[str, float] = field(default_factory=dict)
     artist_weights: Dict[str, float] = field(default_factory=dict)
+    track_weights: Dict[str, float] = field(default_factory=dict)  # вес каждого учтённого трека истории
     n_known_tracks: int = 0
 
     @staticmethod

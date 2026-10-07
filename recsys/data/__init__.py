@@ -1,5 +1,5 @@
 from recsys.data.catalog import Catalog
-from recsys.data.history import InteractionStore, build_profile
-from recsys.data.load import DataBundle, load_data
+from recsys.data.history import build_profile
+from recsys.data.load import DataBundle, history_frame, load_data
 
-__all__ = ["Catalog", "InteractionStore", "build_profile", "DataBundle", "load_data"]
+__all__ = ["Catalog", "build_profile", "DataBundle", "history_frame", "load_data"]

@@ -1,7 +1,11 @@
-"""Каталог треков: track_id -> название, артист, теги, жанры, популярность."""
+"""Каталог треков: track_id -> название, артист, теги, жанры, популярность (+ любые доп. колонки).
+
+Опционально: матрица аудио-эмбеддингов, строка i = трек в позиции i.
+"""
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+import os
 from typing import Dict, Iterable, List, Optional
 
 import numpy as np
@@ -14,13 +18,22 @@ COLUMNS = ["track_id", "title", "artist", "tags", "tag_weights", "genres", "popu
 
 
 class Catalog:
-    """Обёртка над DataFrame с колонками COLUMNS.
+    """Обёртка над DataFrame с колонками COLUMNS; остальные колонки (год, язык, energy, ...) сохраняются.
 
     tags отсортированы по убыванию веса, tag_weights в шкале Last.fm (0–100).
+    embeddings: (len(df), dim) float32, L2-нормированы, порядок строк как в df.
     """
 
-    def __init__(self, df: pd.DataFrame, normalize: bool = True):
+    def __init__(self, df: pd.DataFrame, normalize: bool = True, embeddings: Optional[np.ndarray] = None):
         df = df.copy()
+        df["track_id"] = df["track_id"].astype(str)
+        keep = ~df["track_id"].duplicated().to_numpy()
+        df = df[keep].copy()
+        if embeddings is not None:
+            if len(embeddings) != len(keep):
+                raise ValueError(f"embeddings: {len(embeddings)} строк, а треков {len(keep)}")
+            embeddings = np.ascontiguousarray(embeddings[keep], dtype=np.float32)
+        self.embeddings = embeddings
         for col in ["title", "artist"]:
             if col not in df:
                 df[col] = ""
@@ -42,10 +55,8 @@ class Catalog:
         if "popularity" not in df:
             df["popularity"] = 0.0
         df["popularity"] = pd.to_numeric(df["popularity"], errors="coerce").fillna(0.0).astype(float)
-        df["track_id"] = df["track_id"].astype(str)
-        df = df.drop_duplicates("track_id").reset_index(drop=True)
-        self.df = df
-        self._pos: Dict[str, int] = {tid: i for i, tid in enumerate(df["track_id"])}
+        self.df = df.reset_index(drop=True)
+        self._pos: Dict[str, int] = {tid: i for i, tid in enumerate(self.df["track_id"])}
         self._tag_index: Optional[Dict[str, np.ndarray]] = None
         self._artist_index: Optional[Dict[str, str]] = None
 
@@ -125,11 +136,16 @@ class Catalog:
     # ------------------------------------------------------------ сохранение
 
     def save(self, path: str) -> None:
-        self.df[COLUMNS].to_parquet(path, index=False)
+        """parquet с таблицей + рядом .emb.npy с эмбеддингами (если есть)."""
+        self.df.to_parquet(path, index=False)
+        if self.embeddings is not None:
+            np.save(path + ".emb.npy", self.embeddings)
 
     @classmethod
     def load(cls, path: str) -> "Catalog":
-        return cls(pd.read_parquet(path), normalize=False)
+        emb_path = path + ".emb.npy"
+        emb = np.load(emb_path) if os.path.exists(emb_path) else None
+        return cls(pd.read_parquet(path), normalize=False, embeddings=emb)
 
     def stats(self) -> pd.Series:
         n_tags = self.df["tags"].map(len)
@@ -141,6 +157,7 @@ class Catalog:
             "mean_tags": round(float(n_tags.mean()), 2) if len(self) else 0.0,
             "with_popularity": int((self.df["popularity"] > 0).sum()),
             "unique_tags": len(self.tag_index),
+            "embedding_dim": 0 if self.embeddings is None else int(self.embeddings.shape[1]),
         })
 
 

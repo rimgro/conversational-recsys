@@ -1,45 +1,25 @@
 # Пути относительные: ноутбук запускается из корня репозитория.
 
 data:
-  source: synthetic            # synthetic | onion | dataset
-  cache_dir: data/cache
+  source: synthetic            # synthetic (работает сразу) | crs (Music4All-CRS, docs/dataset.md)
+  eval_split: test_public      # на каких запросах считать метрики
+  max_positives_per_user: 5    # сколько позитивов (= запросов) брать на пользователя; null = все
+  max_tags: 20                 # теги Last.fm с наибольшим весом
+  seed: 42
+  cache_dir: data/cache        # кэш каталога crs (parquet + эмбеддинги .npy)
   use_cache: true
 
   synthetic:
     n_tracks: 5000
-    n_users: 500
-    n_dialogs: 300
+    n_users: 300
     seed: 42
-    save_dir: null             # например data/synthetic_dataset: сохранить в формате нашего датасета
 
-  onion:
-    # TODO: путь к Onion в DataSphere (S3-коннектор к бакету или локальная копия)
-    dir: data/onion
-    interactions_file: userid_trackid_count.tsv.bz2
-    user_sample_mod: 20        # пользователи с user_id % 20 == 0 (~6k из 119k); null = все
-    max_rows: null             # ограничить чтение для быстрой проверки, например 2_000_000
-    use_genres: true
-    max_tags: 20
-    metadata_file: null        # таблица track_id, title, artist (из нашего датасета)
-    n_eval_requests: 200
-
-  dataset:                     # наш датасет с диалогами (формат: recsys/data/dataset.py)
-    dir: data/our_dataset
-    tracks_file: tracks.parquet
-    dialogs_file: dialogs.jsonl
-    interactions_file: null    # если есть отдельный файл прослушиваний
-    use_onion_tags: false      # взять теги/жанры из Onion (data.onion.dir) и склеить с названиями
-    use_onion_interactions: false
-    max_history: 30
-    fields:                    # имена полей в dialogs.jsonl, если отличаются от ожидаемых
-      dialog_id: dialog_id
-      user_id: user_id
-      user_info: user_info
-      history: history
-      messages: messages
-      role: role
-      text: text
-      targets: target_track_ids
+  crs:
+    dir: data                  # tracks_meta.parquet, train.parquet, test_public.parquet
+    splits: [train, test_public]
+    n_users: 300               # сэмпл пользователей на сплит (полный train ~12.9k); null = все
+    seed: 42
+    with_lyrics: false         # тексты песен в каталог (нужно для поиска по строчке текста)
 
 llm:
   type: stub                   # stub | local
@@ -64,7 +44,7 @@ retrieval:                     # порядок = порядок вызова; e
 fusion:
   rrf_k: 60
   top_n: 500                   # сколько отдаём в ранкер
-  exclude_listened: true
+  exclude_listened: false     # 93% целей в датасете — повторные прослушивания, их нельзя выкидывать
   weights: {bm25: 1.0, hnsw: 0.3, history: 0.8, popular: 0.3}
   no_query_boost: {history: 2.0, popular: 1.5}   # запрос пустой («ещё»)
   cold_start_boost: {popular: 2.0}               # истории нет

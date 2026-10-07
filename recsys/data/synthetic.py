@@ -1,228 +1,267 @@
-"""Синтетические данные, чтобы пайплайн запускался без реальных диалогов.
+"""Синтетика в формате Music4All-CRS (tracks_meta + сплиты), чтобы всё запускалось без данных.
 
-make_synthetic                     каталог + прослушивания + диалоги в формате нашего датасета
-make_requests_from_interactions    запросы из реальных прослушиваний Onion: часть истории -> цели,
-                                   реплика по шаблону из тегов цели
-
-Метрики на таких запросах завышены: запросы строятся из тех же тегов, по которым ищем.
+make_synthetic() -> (tracks_meta, {"train": df, "test_public": df}); дальше те же функции, что для
+настоящих файлов (recsys.data.crs). Запросы на русском, по шаблонам из атрибутов цели;
+~90% целей из истории (как в датасете). Метрики на синтетике ничего не говорят о реальном качестве.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+import json
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 
-from recsys.data.catalog import Catalog
-from recsys.data.history import InteractionStore
-from recsys.schemas import Message, Request
-from recsys.text import GENERIC_WORDS
-
-GENRES: Dict[str, List[str]] = {
-    "indie rock": ["indie", "alternative", "guitar", "melancholic", "british"],
-    "hip hop": ["rap", "beats", "underground hip hop", "urban", "party"],
-    "electronic": ["dance", "house", "energetic", "party", "synth"],
-    "ambient": ["chill", "calm", "atmospheric", "instrumental", "relaxing"],
-    "jazz": ["smooth jazz", "saxophone", "instrumental", "relaxing", "night"],
-    "classical": ["piano", "instrumental", "orchestral", "calm", "romantic"],
-    "metal": ["heavy metal", "aggressive", "guitar", "energetic", "dark"],
-    "pop": ["catchy", "dance", "happy", "female vocalists", "party"],
-    "folk": ["acoustic", "singer-songwriter", "calm", "melancholic", "guitar"],
-    "lo-fi": ["chill hop", "beats", "study", "chill", "instrumental"],
-    "rnb": ["soul", "romantic", "smooth", "female vocalists", "sexy"],
-    "punk": ["punk rock", "energetic", "fast", "aggressive", "garage"],
+# жанр -> (по-русски, теги жанра)
+GENRES: Dict[str, Tuple[str, List[str]]] = {
+    "indie rock": ("инди-рок", ["indie", "alternative", "guitar", "melancholic", "british"]),
+    "hip hop": ("хип-хоп", ["rap", "underground hip hop", "urban", "party"]),
+    "electronic": ("электронная музыка", ["dance", "house", "energetic", "party", "synth"]),
+    "ambient": ("эмбиент", ["chill", "calm", "atmospheric", "instrumental", "relaxing"]),
+    "jazz": ("джаз", ["smooth jazz", "saxophone", "instrumental", "relaxing", "night"]),
+    "classical": ("классическая музыка", ["piano", "instrumental", "orchestral", "calm", "romantic"]),
+    "metal": ("метал", ["heavy metal", "aggressive", "guitar", "energetic", "dark"]),
+    "pop": ("поп", ["catchy", "dance", "happy", "female vocalists", "party"]),
+    "folk": ("фолк", ["acoustic", "singer-songwriter", "calm", "melancholic", "guitar"]),
+    "soul": ("соул", ["rnb", "romantic", "smooth", "female vocalists"]),
+    "punk": ("панк", ["punk rock", "energetic", "fast", "aggressive", "garage"]),
 }
-EXTRA_TAGS = ["happy", "sad", "dark", "romantic", "summer", "night", "80s", "90s", "00s", "male vocalists"]
+# как тег звучит в русском запросе (прилагательные в форме, которую ловит словарь разбора)
+TAG_RU: Dict[str, str] = {
+    "indie": "инди", "alternative": "альтернативный", "guitar": "гитарный", "melancholic": "меланхоличный",
+    "british": "британский", "rap": "рэп", "underground hip hop": "андеграундный хип-хоп", "urban": "уличный",
+    "party": "для вечеринки", "dance": "танцевальный", "house": "хаус", "energetic": "энергичный",
+    "synth": "синтезаторный", "chill": "расслабленный", "calm": "спокойный", "atmospheric": "атмосферный",
+    "instrumental": "без слов", "relaxing": "расслабляющий", "smooth jazz": "смус-джаз", "saxophone": "с саксофоном",
+    "night": "ночной", "piano": "фортепианный", "orchestral": "оркестровый", "romantic": "романтичный",
+    "heavy metal": "хеви-метал", "aggressive": "агрессивный", "dark": "мрачный", "catchy": "цепляющий",
+    "happy": "весёлый", "female vocalists": "с женским вокалом", "acoustic": "акустический",
+    "singer-songwriter": "авторский", "rnb": "ритм-н-блюз", "smooth": "плавный", "punk rock": "панк-рок",
+    "fast": "быстрый", "garage": "гаражный", "sad": "грустный", "summer": "летний",
+    "male vocalists": "с мужским вокалом",
+}
+# как исключение «без ...»
+TAG_RU_GEN: Dict[str, str] = {
+    "sad": "грустных нот", "aggressive": "агрессии", "female vocalists": "женского вокала",
+    "male vocalists": "мужского вокала", "dark": "мрачности", "party": "вечеринок", "dance": "танцевальности",
+    "guitar": "гитар", "piano": "фортепиано", "rap": "рэпа", "synth": "синтезаторов", "fast": "быстрого темпа",
+}
+EXTRA_TAGS = ["happy", "sad", "dark", "romantic", "summer", "night", "male vocalists"]
+COUNTRIES = {"US": "американский", "GB": "британский", "DE": "немецкий", "SE": "шведский", "FR": "французский"}
+DECADE_RU = {1970: "70-х", 1980: "80-х", 1990: "90-х", 2000: "2000-х", 2010: "2010-х"}
+SITUATIONS = [("для пробежки", "high"), ("для тренировки", "high"), ("для вечеринки", "high"),
+              ("для учёбы", "low"), ("чтобы уснуть", "low"), ("для работы в тишине", "low")]
 _ADJ = ["Velvet", "Electric", "Silent", "Golden", "Neon", "Paper", "Crystal", "Midnight", "Wild", "Lunar",
         "Broken", "Hollow", "Scarlet", "Frozen", "Cosmic", "Northern", "Rusty", "Gentle", "Static", "Violet"]
 _NOUN = ["Owls", "Rivers", "Machines", "Hearts", "Wolves", "Lights", "Engines", "Gardens", "Ghosts", "Tides",
          "Foxes", "Mirrors", "Waves", "Pilots", "Saints", "Echoes", "Kites", "Comets", "Bridges", "Crowns"]
-_WORDS = ["Rain", "Fire", "Morning", "Shadows", "Dreams", "City", "Ocean", "Glass", "Summer", "Static",
-          "Home", "Stars", "Road", "Smoke", "Gold", "Silence", "Storm", "Paper", "Echo", "Blue"]
-COUNTRIES = ["Germany", "Brazil", "USA", "Russia", "Poland", "UK", "Japan", "Spain", "Mexico", "Sweden"]
+_WORDS = ["rain", "fire", "morning", "shadows", "dreams", "city", "ocean", "glass", "summer", "home", "stars",
+          "road", "smoke", "gold", "silence", "storm", "paper", "echo", "blue", "heart", "night", "river",
+          "window", "train", "mountain", "letter", "mirror", "garden", "winter", "light"]
+_LAT2CYR = [("sh", "ш"), ("ch", "ч"), ("th", "т"), ("oo", "у"), ("ee", "и"), ("a", "а"), ("b", "б"), ("c", "к"),
+            ("d", "д"), ("e", "е"), ("f", "ф"), ("g", "г"), ("h", "х"), ("i", "и"), ("j", "дж"), ("k", "к"),
+            ("l", "л"), ("m", "м"), ("n", "н"), ("o", "о"), ("p", "п"), ("q", "к"), ("r", "р"), ("s", "с"),
+            ("t", "т"), ("u", "у"), ("v", "в"), ("w", "в"), ("x", "кс"), ("y", "й"), ("z", "з")]
+TRAIN_START, TEST_START, TEST_END = 1579564800, 1582156800, 1584662400  # 2020-01-21, 2020-02-20, 2020-03-20
 
 
-def make_synthetic(
-    n_tracks: int = 5000,
-    n_users: int = 500,
-    n_dialogs: int = 300,
-    n_artists: int = 300,
-    seed: int = 42,
-) -> Tuple[pd.DataFrame, pd.DataFrame, List[Dict[str, Any]]]:
-    """-> (tracks, interactions, dialogs) в формате, который читают loaders/dataset."""
+def to_cyrillic(text: str) -> str:
+    """Грубая транслитерация латиницы в кириллицу (имитирует запросы «кате буш»)."""
+    out, s, i = [], text.lower(), 0
+    while i < len(s):
+        for lat, cyr in _LAT2CYR:
+            if s.startswith(lat, i):
+                out.append(cyr)
+                i += len(lat)
+                break
+        else:
+            out.append(s[i])
+            i += 1
+    return "".join(out)
+
+
+def make_synthetic(n_tracks: int = 5000, n_users: int = 300, n_artists: int = 300,
+                   seed: int = 42) -> Tuple[pd.DataFrame, Dict[str, pd.DataFrame]]:
     rng = np.random.default_rng(seed)
-    genres = list(GENRES)
+    meta = _make_tracks(rng, n_tracks, n_artists)
+    by_genre = {g: np.flatnonzero(meta["_genre"].to_numpy() == g) for g in GENRES}
+    pop = meta["onion_listens"].to_numpy(dtype=float) + 1.0
 
-    # артисты
-    names = list(dict.fromkeys(f"{a} {n}" for a in _ADJ for n in _NOUN))
+    train_rows, test_rows = [], []
+    for u in range(n_users):
+        fav = list(rng.choice(list(GENRES), size=int(rng.integers(1, 3)), replace=False))
+        pool = np.concatenate([by_genre[g] for g in fav])
+        n_unique = int(rng.integers(15, 120))
+        own = _sample(rng, pool, pop, int(n_unique * 0.85)) + _sample(rng, np.arange(n_tracks), pop, n_unique // 7)
+        own = list(dict.fromkeys(own))
+        history, ts = _listen(rng, own, start=1262304000, end=TRAIN_START, n=int(rng.integers(50, 600)))
+        own = list(dict.fromkeys(history))  # «свои» = реально прослушанные: от них считается is_new
+        profile_info = _demographics(rng)
+        train_pos = _positives(rng, meta, own, pool, pop, TRAIN_START, TEST_START)
+        train_rows.append(_user_row(u, "train", history, ts, profile_info, train_pos, meta))
+        # история теста = история train + прослушивания train-окна
+        h2 = history + [p["_idx"] for p in train_pos]
+        t2 = ts + [p["ts"] for p in train_pos]
+        own2 = list(dict.fromkeys(h2))
+        test_pos = _positives(rng, meta, own2, pool, pop, TEST_START, TEST_END)
+        test_rows.append(_user_row(u, "test_public", h2, t2, profile_info, test_pos, meta))
+    return meta.drop(columns=["_genre"]), {"train": pd.DataFrame(train_rows), "test_public": pd.DataFrame(test_rows)}
+
+
+# ---------------------------------------------------------------- каталог
+
+def _make_tracks(rng, n_tracks: int, n_artists: int) -> pd.DataFrame:
+    genres = list(GENRES)
+    names = [f"{a} {n}" for a in _ADJ for n in _NOUN]
     rng.shuffle(names)
     artists = [("The " + n) if rng.random() < 0.3 else n for n in names[:n_artists]]
-    artist_genre = rng.choice(genres, size=len(artists))
-    artist_pop = rng.lognormal(0, 1.0, size=len(artists))
+    a_genre = rng.choice(genres, size=len(artists))
+    a_country = rng.choice(list(COUNTRIES), size=len(artists))
+    a_decade = rng.choice(list(DECADE_RU), size=len(artists))
+    a_pop = rng.lognormal(0, 1.0, size=len(artists))
+    centers = {g: _unit(rng.normal(size=128)) for g in genres}
 
-    # треки
     rows = []
     for i in range(n_tracks):
         a = int(rng.integers(len(artists)))
-        g = artist_genre[a]
-        pool = GENRES[g]
-        own = list(rng.choice(pool, size=int(rng.integers(2, 5)), replace=False))
-        extra = list(rng.choice(EXTRA_TAGS, size=int(rng.integers(0, 3)), replace=False))
-        tags = [g] + own + [t for t in extra if t not in own]
-        weights = [100.0] + sorted((float(rng.integers(30, 95)) for _ in own), reverse=True) + \
-                  [float(rng.integers(5, 40)) for t in extra if t not in own]
-        title = " ".join(rng.choice(_WORDS, size=int(rng.integers(1, 3)), replace=False))
+        g = str(a_genre[a])
+        own = list(rng.choice(GENRES[g][1], size=min(len(GENRES[g][1]), int(rng.integers(2, 5))), replace=False))
+        extra = [t for t in rng.choice(EXTRA_TAGS, size=int(rng.integers(0, 3)), replace=False) if t not in own]
+        tags = {g: 100}
+        tags.update({t: int(rng.integers(30, 95)) for t in own})
+        tags.update({t: int(rng.integers(5, 40)) for t in extra})
+        instrumental = "instrumental" in tags
+        energetic = any(t in tags for t in ("energetic", "aggressive", "fast", "party", "dance"))
+        calm = any(t in tags for t in ("calm", "chill", "relaxing"))
+        title = " ".join(w.capitalize() for w in rng.choice(_WORDS, size=int(rng.integers(1, 4)), replace=False))
+        lyrics = "" if instrumental else " ".join(rng.choice(_WORDS, size=60))
         rows.append({
-            "track_id": f"t{i:06d}",
-            "title": title,
-            "artist": artists[a],
-            "tags": tags,
-            "tag_weights": weights,
-            "genres": [g],
-            "_pop": float(artist_pop[a] * rng.lognormal(0, 0.7)),
+            "m4a_id": f"T{i:015d}",
+            "spotify_id": f"S{i:021d}",
+            "m4a_artist": artists[a],
+            "m4a_song": title,
+            "m4a_album": f"{title.split()[0]} Album",
+            "release_year": int(a_decade[a]) + int(rng.integers(0, 10)),
+            "lang": "INTRUMENTAL" if instrumental else "en",
+            "is_instrumental": instrumental,
+            "artist_country": str(a_country[a]),
+            "m4a_genres_full": g,
+            "lastfm_tag_weights": json.dumps(tags),
+            "onion_listens": int(a_pop[a] * rng.lognormal(3, 1)),
+            "energy": float(np.clip(rng.normal(0.8 if energetic else 0.3 if calm else 0.55, 0.1), 0, 1)),
+            "valence": float(np.clip(rng.normal(0.7 if "happy" in tags else 0.3 if "sad" in tags else 0.5, 0.1), 0, 1)),
+            "tempo": float(rng.normal(150 if energetic else 85 if calm else 115, 10)),
+            "danceability": float(np.clip(rng.normal(0.7 if "dance" in tags else 0.45, 0.1), 0, 1)),
+            "pseudo_caption": f"A {', '.join(list(tags)[:3])} song.",
+            "lyrics": lyrics,
+            "muq_embedding": list(_unit(centers[g] + 0.6 * _unit(rng.normal(size=128)))),
+            "_genre": g,
         })
-    tracks = pd.DataFrame(rows)
-    by_genre = {g: tracks.index[tracks["genres"].map(lambda x, g=g: x[0] == g)].to_numpy() for g in genres}
-    pop = tracks["_pop"].to_numpy()
-
-    def sample_tracks(idx: np.ndarray, k: int) -> np.ndarray:
-        p = pop[idx] / pop[idx].sum()
-        return rng.choice(idx, size=min(k, len(idx)), replace=False, p=p)
-
-    # пользователи и история
-    users, inter = [], []
-    for u in range(n_users):
-        fav = list(rng.choice(genres, size=int(rng.integers(1, 3)), replace=False))
-        n_hist = int(rng.integers(5, 31))
-        fav_idx = np.concatenate([by_genre[g] for g in fav])
-        n_fav = int(round(n_hist * 0.85))
-        hist = list(sample_tracks(fav_idx, n_fav)) + list(sample_tracks(tracks.index.to_numpy(), n_hist - n_fav))
-        hist = list(dict.fromkeys(int(h) for h in hist))
-        counts = rng.geometric(0.3, size=len(hist)).astype(float)
-        uid = str(100000 + u)
-        users.append({
-            "user_id": uid,
-            "fav": fav,
-            "history": [{"track_id": tracks.at[h, "track_id"], "count": c} for h, c in zip(hist, counts)],
-            "user_info": _user_info(rng, fav),
-        })
-        inter.extend({"user_id": uid, "track_id": tracks.at[h, "track_id"], "count": c} for h, c in zip(hist, counts))
-    interactions = pd.DataFrame(inter)
-
-    # популярность = число слушателей (как для Onion) + сглаживание по «скрытой» популярности
-    listeners = interactions.groupby("track_id")["user_id"].nunique()
-    tracks["popularity"] = tracks["track_id"].map(listeners).fillna(0.0) + tracks["_pop"]
-    tracks = tracks.drop(columns=["_pop"])
-
-    dialogs = [_make_dialog(rng, d, users[int(rng.integers(len(users)))], tracks, by_genre, artists, artist_genre)
-               for d in range(n_dialogs)]
-    return tracks, interactions, dialogs
+    return pd.DataFrame(rows)
 
 
-def _user_info(rng, fav: List[str]) -> str:
-    if rng.random() < 0.15:
-        return ""
-    gender = rng.choice(["male", "female"])
-    age = int(rng.integers(16, 55))
-    country = rng.choice(COUNTRIES)
-    return f"{gender}, {age} years old, from {country}. Favourite genres: {', '.join(fav)}."
+def _unit(v: np.ndarray) -> np.ndarray:
+    return (v / np.linalg.norm(v)).astype(np.float32)
 
 
-def _make_dialog(rng, d: int, user: dict, tracks: pd.DataFrame, by_genre, artists, artist_genre) -> Dict[str, Any]:
-    genres = list(GENRES)
-    g = user["fav"][0] if rng.random() < 0.6 else str(rng.choice(genres))
-    t1, t2 = rng.choice(GENRES[g], size=2, replace=False)
-    other = [t for t in EXTRA_TAGS + [x for gg in genres if gg != g for x in GENRES[gg]] if t not in GENRES[g]]
-    ex = str(rng.choice(other)) if rng.random() < 0.35 else None
-    seed_artist = None
-    if rng.random() < 0.3:
-        cand = [a for a, ag in zip(artists, artist_genre) if ag == g]
-        seed_artist = str(rng.choice(cand)) if cand else None
+def _sample(rng, idx: np.ndarray, pop: np.ndarray, k: int) -> List[int]:
+    k = min(k, len(idx))
+    return [int(x) for x in rng.choice(idx, size=k, replace=False, p=pop[idx] / pop[idx].sum())] if k else []
 
-    first = str(rng.choice([
-        f"Hi! I'm looking for some {t1} {g} music.",
-        f"Can you recommend something {t1} and {t2}?",
-        f"I want to listen to {g}, preferably {t1}.",
-        f"Give me some {g} tracks for tonight.",
-    ]))
-    if seed_artist:
-        first += f" Something like {seed_artist}."
-    msgs = [{"role": "user", "text": first}]
-    if rng.random() < 0.5:
-        msgs.append({"role": "assistant", "text": "Sure! Any preferences on the mood or energy?"})
-        follow = f"Maybe more {t2}."
-        if ex:
-            follow += f" And please no {ex}."
-        msgs.append({"role": "user", "text": follow})
-    elif ex:
-        msgs[0]["text"] += f" But without {ex}, please."
 
-    # цели: популярные треки нужного жанра с тегом t1, не из истории и без исключённого тега
-    heard = {h["track_id"] for h in user["history"]}
-    idx = by_genre[g]
-    ok = [i for i in idx
-          if t1 in tracks.at[i, "tags"] and tracks.at[i, "track_id"] not in heard
-          and (ex is None or ex not in tracks.at[i, "tags"])]
-    if seed_artist:
-        ok = [i for i in ok if tracks.at[i, "artist"] == seed_artist] or ok
-    ok = sorted(ok, key=lambda i: -tracks.at[i, "popularity"] if "popularity" in tracks else 0)[:30]
-    targets = [tracks.at[i, "track_id"] for i in rng.choice(ok, size=min(5, len(ok)), replace=False)] if ok else []
+# ---------------------------------------------------------------- пользователи
 
+def _listen(rng, own: List[int], start: int, end: int, n: int):
+    """n прослушиваний своих треков (частые чаще), отсортированных по времени."""
+    w = rng.pareto(1.2, size=len(own)) + 0.1
+    picks = rng.choice(len(own), size=n, p=w / w.sum())
+    ts = np.sort(rng.integers(start, end, size=n))
+    return [int(own[i]) for i in picks], [int(t) for t in ts]
+
+
+def _demographics(rng):
+    if rng.random() < 0.4:
+        return None
+    return {"age": int(rng.integers(16, 55)), "gender": str(rng.choice(["m", "f"])),
+            "country": str(rng.choice(["US", "DE", "RU", "BR", "PL"]))}
+
+
+def _positives(rng, meta, own: List[int], pool: np.ndarray, pop: np.ndarray, start: int, end: int) -> List[dict]:
+    n = int(rng.integers(1, 8))
+    out, seen = [], set()
+    for _ in range(n):
+        if rng.random() < 0.9 and own:
+            idx = int(own[int(rng.integers(len(own)))])
+        else:
+            idx = _sample(rng, pool, pop, 1)[0]
+        if idx in seen:
+            continue
+        seen.add(idx)
+        family, query = _query(rng, meta.iloc[idx])
+        out.append({"_idx": idx, "is_new": idx not in own, "ts": int(rng.integers(start, end)),
+                    "n_listens": int(rng.integers(1, 6)), "query": query, "query_family": family})
+    out.sort(key=lambda p: p["ts"])
+    return out
+
+
+def _query(rng, t: pd.Series) -> Tuple[str, str]:
+    tags = list(json.loads(t["lastfm_tag_weights"]))
+    genre = tags[0]
+    g_ru = GENRES[genre][0]
+    own_ru = [TAG_RU[x] for x in tags[1:] if x in TAG_RU]
+    decade = DECADE_RU[(t["release_year"] // 10) * 10]
+    family = str(rng.choice(["exact", "lyrics_recall", "genre", "mood", "situation", "era_region",
+                             "audio_attributes", "complex", "negative_constraint"]))
+    if family == "exact":
+        name = f"{t['m4a_artist']} {t['m4a_song']}".lower()
+        return family, to_cyrillic(name) if rng.random() < 0.3 else name
+    if family == "lyrics_recall" and t["lyrics"]:
+        words = t["lyrics"].split()
+        i = int(rng.integers(0, len(words) - 4))
+        return family, "песня со словами " + " ".join(words[i:i + 4])
+    if family == "genre" or (family == "lyrics_recall") or not own_ru:
+        return "genre", f"{own_ru[0] if own_ru else ''} {g_ru}".strip()
+    if family == "mood":
+        return family, f"{rng.choice(own_ru)} {g_ru}"
+    if family == "situation":
+        level = "high" if t["energy"] > 0.6 else "low"
+        place = [s for s, lv in SITUATIONS if lv == level]
+        return family, f"музыка {rng.choice(place)}"
+    if family == "era_region":
+        return family, f"{COUNTRIES[t['artist_country']]} {g_ru} {decade}"
+    if family == "audio_attributes":
+        speed = "быстрый" if t["tempo"] > 120 else "медленный"
+        energy = "энергичный" if t["energy"] > 0.6 else "спокойный"
+        return family, f"{speed} {energy} трек"
+    if family == "complex":
+        return family, f"{rng.choice(own_ru)} {COUNTRIES[t['artist_country']]} {g_ru} {decade}"
+    # negative_constraint: исключаем тег, которого у трека нет
+    absent = [x for x in TAG_RU_GEN if x not in tags]
+    return "negative_constraint", f"{g_ru}, но без {TAG_RU_GEN[str(rng.choice(absent))]}"
+
+
+def _user_row(u: int, split: str, history: List[int], ts: List[int], demo, positives: List[dict],
+              meta: pd.DataFrame) -> dict:
+    ids = meta["m4a_id"].to_numpy()
+    hist_ids = [str(ids[i]) for i in history]
+    artists = pd.Series([meta.at[i, "m4a_artist"] for i in history]).value_counts().index[:10].tolist()
+    genres = pd.Series([meta.at[i, "m4a_genres_full"] for i in history]).value_counts().index[:5].tolist()
+    profile = (f"Слушает музыку с 2010 года; до периода {len(history)} прослушиваний, {len(set(history))} разных "
+               f"треков, {len(set(meta.at[i, 'm4a_artist'] for i in history))} артистов. "
+               f"Любимые артисты: {', '.join(artists)}. Любимые жанры: {', '.join(genres)}.")
     return {
-        "dialog_id": f"d{d:05d}",
-        "user_id": user["user_id"],
-        "user_info": user["user_info"],
-        "history": user["history"],
-        "messages": msgs,
-        "target_track_ids": targets,
+        "user_id": 100000 + u,
+        "split": split,
+        "history": hist_ids,
+        "history_ts": ts,
+        "history_len": len(hist_ids),
+        "user_profile": profile,
+        "user_demographics": demo,
+        "n_positives": len(positives),
+        "positives": [{
+            "m4a_id": str(ids[p["_idx"]]), "spotify_id": meta.at[p["_idx"], "spotify_id"],
+            "artist": meta.at[p["_idx"], "m4a_artist"], "title": meta.at[p["_idx"], "m4a_song"],
+            "ts": p["ts"], "n_listens": p["n_listens"], "is_new": p["is_new"],
+            "query": p["query"], "query_family": p["query_family"],
+        } for p in positives],
     }
-
-
-# ---------------------------------------------------------------- запросы из прослушиваний Onion
-
-# Теги Last.fm, которые не описывают музыку.
-JUNK_TAGS = {"seen live", "favorites", "favourite", "favorite", "albums i own", "under 2000 listeners",
-             "spotify", "my favorite", "awesome", "beautiful", "love", "loved", "good", "best"}
-
-_TEMPLATES = [
-    "I'm looking for something {a} and {b}.",
-    "Can you recommend some {a} music? Preferably {b}.",
-    "Play me some {a} tracks, something {b}.",
-    "I want {a}, maybe a bit {b}.",
-]
-
-
-def make_requests_from_interactions(
-    catalog: Catalog,
-    interactions: InteractionStore,
-    n_requests: int = 200,
-    n_history: int = 20,
-    n_targets: int = 5,
-    seed: int = 42,
-) -> List[Request]:
-    rng = np.random.default_rng(seed)
-    users = [u for u in interactions.users if interactions.n_tracks(u) >= n_history + n_targets]
-    rng.shuffle(users)
-    requests: List[Request] = []
-    for uid in users:
-        if len(requests) >= n_requests:
-            break
-        items = [h for h in interactions.history(uid, max_len=None) if h.track_id in catalog]
-        items = list({h.track_id: h for h in items}.values())
-        if len(items) < n_history + n_targets:
-            continue
-        order = rng.permutation(len(items))
-        targets = [items[i] for i in order[:n_targets]]
-        history = [items[i] for i in order[n_targets:n_targets + n_history]]
-        tags = [t for t in catalog.tags(targets[0].track_id) if t not in JUNK_TAGS and t not in GENERIC_WORDS]
-        if len(tags) < 2:
-            continue
-        text = str(rng.choice(_TEMPLATES)).format(a=tags[0], b=tags[1])
-        requests.append(Request(
-            dialog=[Message("user", text)],
-            history=history,
-            user_id=uid,
-            request_id=f"onion_{uid}",
-            target_ids=[t.track_id for t in targets],
-        ))
-    return requests

@@ -1,0 +1,23 @@
+{
+  "request_id": "example_03_exact",
+  "user_id": "100021",
+  "user_info": "Слушает музыку с 2012 года; до периода 400 прослушиваний, 120 разных треков, 40 артистов. Любимые артисты: Frozen Machines. Любимые жанры: metal.",
+  "history": [
+    {
+      "track_id": "T000000000000001",
+      "count": 7,
+      "timestamp": 1579000000
+    },
+    {
+      "track_id": "T000000000000002",
+      "count": 4,
+      "timestamp": 1578000000
+    }
+  ],
+  "dialog": [
+    {
+      "role": "user",
+      "text": "frozen machines что-то мрачное и тяжёлое"
+    }
+  ]
+}

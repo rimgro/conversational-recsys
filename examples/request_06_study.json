@@ -1,8 +1,17 @@
 {
   "request_id": "example_06_study",
-  "user_info": "student, likes lo-fi and jazz",
-  "history": [{"track_id": "t000010", "count": 2}],
+  "user_info": "Слушает музыку с 2012 года; до периода 400 прослушиваний, 120 разных треков, 40 артистов. Любимые артисты: Lunar Kites. Любимые жанры: jazz, ambient.",
+  "history": [
+    {
+      "track_id": "T000000000000010",
+      "count": 2,
+      "timestamp": 1579000000
+    }
+  ],
   "dialog": [
-    {"role": "user", "text": "I need instrumental music to study, chill beats or smooth jazz, nothing too loud."}
+    {
+      "role": "user",
+      "text": "инструментальная музыка для учёбы, спокойный джаз, только не быстрый"
+    }
   ]
 }
