@@ -9,6 +9,13 @@ IDX=${2:-indexes}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BM25_PY=$(command -v "${BM25_PYTHON:-python}")
 HNSW_PY=$(command -v "${HNSW_PYTHON:-python}")
+for PY in "$BM25_PY" "$HNSW_PY"; do
+  "$PY" -c 'import sys, fastapi, uvicorn; sys.exit(sys.version_info < (3, 10))' 2>/dev/null || {
+    echo "$PY: нужен Python 3.10+ с fastapi и uvicorn, например:" >&2
+    echo "  python3.12 -m venv .venv-candgen && .venv-candgen/bin/pip install -r bm25/requirements.txt -r hnsw/requirements.txt" >&2
+    echo "  BM25_PYTHON=.venv-candgen/bin/python HNSW_PYTHON=.venv-candgen/bin/python sh deploy/run_local.sh $SRC" >&2
+    exit 1; }
+done
 
 [ -f "$IDX/bm25/genres/meta.json" ] || BM25_PYTHON=$BM25_PY sh "$ROOT/deploy/build_indexes.sh" bm25 "$SRC" "$IDX"
 [ -f "$IDX/hnsw/audio/meta.json" ] || HNSW_PYTHON=$HNSW_PY sh "$ROOT/deploy/build_indexes.sh" hnsw "$SRC" "$IDX"
