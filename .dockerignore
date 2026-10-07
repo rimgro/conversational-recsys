@@ -1,0 +1,10 @@
+# контекст сборки обоих образов — корень репозитория; данные и индексы монтируются, а не копируются
+.git
+data
+indexes
+.venv
+venv
+**/__pycache__
+**/.pytest_cache
+**/.ipynb_checkpoints
+.DS_Store

@@ -1,0 +1,8 @@
+# объединение bm25/requirements.txt и hnsw/requirements.txt
+numpy
+scipy
+pandas
+pyarrow
+fastapi
+uvicorn
+pydantic>=2
