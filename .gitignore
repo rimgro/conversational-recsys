@@ -3,6 +3,9 @@
 /artifacts/
 /models/
 /outputs/
+# индексы кандгенов (bm25, hnsw) строятся из tracks_meta
+indexes/
+warning.md
 *.parquet
 *.tsv
 *.tsv.bz2
