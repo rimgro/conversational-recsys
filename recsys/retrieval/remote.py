@@ -119,6 +119,7 @@ class _RemoteRetriever(BaseRetriever):
         self.index = index
         self.last_error: Optional[str] = None
         self.last_response: Optional[Dict[str, Any]] = None
+        self.n_errors = 0  # сколько запросов прошло без кандидатов этого источника
 
     def payload(self, ctx: Context, k: int) -> Optional[Dict[str, Any]]:
         raise NotImplementedError
@@ -134,6 +135,7 @@ class _RemoteRetriever(BaseRetriever):
             if self.last_error is None:  # одно предупреждение на источник, дальше только last_error
                 warnings.warn(f"{self.name}: кандген недоступен, источник пропущен ({e})")
             self.last_error = str(e)
+            self.n_errors += 1
             return []
         self.last_error = None
         self.last_response = {k: v for k, v in resp.items() if k not in ("ids", "scores")}

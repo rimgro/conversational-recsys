@@ -46,6 +46,26 @@ VPS                                                DataSphere: recsys/ + ноу�
   Без надстройки работают локальные `bm25` и `audio`, так что ноутбук запускается и без VPS.
 - Если сервис недоступен, его источники возвращают пустой список с предупреждением, остальные работают.
 
+## Валидация (`evaluate.py`)
+
+Метрики пайплайна на сплите датасета: роль валидации играет `test_public` (12k пользователей, 231k запросов),
+`test_private` скрыт. Метрики @10 (цель одна, поэтому hit = recall), по типам запросов и по новым/знакомым трекам,
+плюс recall каждого источника кандидатов.
+
+```bash
+python evaluate.py --data-dir "CRS dataset" --n-users 1000              # быстро, ~3 мин
+python evaluate.py --data-dir "CRS dataset" --n-users all --candgen     # весь сплит, BM25 и HNSW с VPS
+python evaluate.py --data-dir "CRS dataset" --set ranker.type=heuristic # любой параметр конфига
+```
+
+Результат — `outputs/<время>_<сплит>/`: `metrics.json` (метрики, конфиг, git-коммит, версии индексов сервисов,
+ошибки сервисов), `by_query_family.csv`, `by_is_new.csv`, `per_request.csv` (дописывается по ходу), `config.yaml`.
+С `--candgen` прогон не начнётся, если сервис недоступен (код выхода 2).
+
+Скорость ~25 запросов/с в одном процессе: все пользователи по 5 запросов (~60k) — около 40 минут, весь сплит — ~2.5 часа.
+Короткие прогоны — из ноутбука (`!python evaluate.py ...`) или локально; полный — в DataSphere Jobs без открытого
+ноутбука: `datasphere project job execute -p <id проекта> -c jobs/evaluate.yaml` (что подготовить — в начале файла).
+
 ## Что важно в данных
 
 - **Одна цель на запрос**, 11 типов запросов (`query_family`): exact, lyrics_recall, genre, mood, situation, era_region, ...
@@ -84,6 +104,8 @@ VPS                                                DataSphere: recsys/ + ноу�
 
 ```
 inference.ipynb            инференс: запрос -> ответ
+evaluate.py                валидация: метрики на test_public -> outputs/
+jobs/evaluate.yaml         то же в DataSphere Jobs
 main.ipynb                 эксперименты и метрики
 configs/default.yaml       все параметры и переключатели
 configs/candgen.yaml       надстройка: BM25 и HNSW с VPS по HTTP

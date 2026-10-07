@@ -1,0 +1,41 @@
+# Полный прогон валидации в DataSphere Jobs: скрипт работает в облаке, ноутбук держать открытым не нужно.
+#   pip install datasphere                                           # CLI, один раз
+#   datasphere project job execute -p <id проекта> -c jobs/evaluate.yaml
+# Запускать из корня репозитория, в venv с зависимостями requirements.txt.
+#
+# Перед запуском:
+#   * data/crs/ — части датасета: tracks_meta-*.parquet и test_public-*.parquet (train не нужен);
+#     папка загружается в задание целиком.
+#   * секреты проекта BM25_URL, HNSW_URL (http://<IP>:8001, http://<IP>:8002) — секреты DataSphere
+#     передаются заданию как переменные окружения. Без сервисов: убрать --candgen из cmd.
+# Результат (metrics.json, by_query_family.csv, ...) скачивается в eval_result/ после выполнения.
+# Быстрая проверка — --n-users 300 вместо all.
+name: recsys-evaluate
+desc: Метрики пайплайна на test_public (BM25 и HNSW с VPS)
+
+cmd: >
+  python3 evaluate.py --candgen --split test_public --n-users all
+  --data-dir ${DATA} --run-dir ${RESULT}
+
+inputs:
+  - configs/default.yaml
+  - configs/candgen.yaml
+  - data/crs:
+      var: DATA
+
+outputs:
+  - eval_result: RESULT
+
+env:
+  vars:
+    - PYTHONUNBUFFERED: 1        # прогресс в логе задания сразу, а не в конце
+  python:
+    type: manual
+    version: 3.10.13
+    requirements-file: requirements.txt
+    local-paths:
+      - evaluate.py
+      - recsys
+
+cloud-instance-types:
+  - c1.4                         # CPU: GPU для пайплайна без LLM не нужен
