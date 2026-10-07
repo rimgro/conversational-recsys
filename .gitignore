@@ -1,0 +1,5 @@
+data/
+indexes/
+warning.md
+__pycache__/
+.pytest_cache/

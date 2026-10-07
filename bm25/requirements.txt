@@ -1,0 +1,6 @@
+numpy
+scipy
+pandas
+fastapi
+uvicorn
+pydantic>=2
