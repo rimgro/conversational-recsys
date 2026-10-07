@@ -42,3 +42,20 @@ def test_synthetic_targets_mostly_from_history(data):
     is_new = [r.meta["is_new"] for r in data.requests]
     in_hist = [r.target_ids[0] in {h.track_id for h in r.history} for r in data.requests]
     assert 0.7 < 1 - sum(is_new) / len(is_new) and is_new == [not x for x in in_hist]
+
+
+def test_crs_loader_reads_parts(cfg, tmp_path):
+    """Полный датасет лежит частями: train-00000-of-00003.parquet, ... — результат тот же, что из одного файла."""
+    meta, splits = make_synthetic(n_tracks=300, n_users=20, seed=1)
+    whole, parts = tmp_path / "whole", tmp_path / "parts"
+    whole.mkdir(), parts.mkdir()
+    for name, df in {"tracks_meta": meta, **splits}.items():
+        df.to_parquet(whole / f"{name}.parquet", index=False)
+        for i, chunk in enumerate((df.iloc[:5], df.iloc[5:12], df.iloc[12:])):  # части идут подряд
+            chunk.to_parquet(parts / f"{name}-{i:05d}-of-00003.parquet", index=False)
+    load = {d: load_data(deep_update(cfg, {"data": {"source": "crs", "cache_dir": None, "crs": {"dir": str(d),
+                                                                                              "n_users": None}}}),
+                         verbose=False) for d in (whole, parts)}
+    assert sorted(load[whole].catalog.track_ids) == sorted(load[parts].catalog.track_ids)
+    key = lambda data: sorted(r.request_id for r in data.splits["train"])  # noqa: E731
+    assert key(load[whole]) == key(load[parts]) and key(load[whole])

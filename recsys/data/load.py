@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 import pandas as pd
 
 from recsys.data.catalog import Catalog
-from recsys.data.crs import catalog_from_meta, read_split, read_tracks_meta, requests_from_split
+from recsys.data.crs import catalog_from_meta, parquet_files, read_split, read_tracks_meta, requests_from_split
 from recsys.data.synthetic import make_synthetic
 from recsys.schemas import Request
 
@@ -43,7 +43,7 @@ def load_data(cfg: Dict[str, Any], verbose: bool = True) -> DataBundle:
     elif dcfg["source"] == "crs":
         c = dcfg["crs"]
         catalog = _crs_catalog(c, dcfg)
-        split_dfs = {name: read_split(os.path.join(c["dir"], f"{name}.parquet"), n_users=c.get("n_users"),
+        split_dfs = {name: read_split(parquet_files(c["dir"], name), n_users=c.get("n_users"),
                                       seed=c.get("seed", 42))
                      for name in c.get("splits", ["train", "test_public"])}
     else:
@@ -62,10 +62,11 @@ def _crs_catalog(c: Dict[str, Any], dcfg: Dict[str, Any]) -> Catalog:
     """tracks_meta -> Catalog, с кэшем (parquet + эмбеддинги .npy) в data.cache_dir."""
     with_lyrics = c.get("with_lyrics", False)
     with_emb = dcfg.get("load_embeddings", True)
-    src = os.path.join(c["dir"], "tracks_meta.parquet")
-    st = os.stat(src)
-    # ключ кэша зависит от исходного файла: новый tracks_meta.parquet не подхватит старый кэш
-    key = (f"{st.st_size}_{int(st.st_mtime)}_{dcfg.get('max_tags', 20)}"
+    src = parquet_files(c["dir"], "tracks_meta")
+    stats = [os.stat(f) for f in src]
+    # ключ кэша зависит от исходных файлов: новый tracks_meta не подхватит старый кэш
+    key = (f"{sum(st.st_size for st in stats)}_{int(max(st.st_mtime for st in stats))}_{len(src)}"
+           f"_{dcfg.get('max_tags', 20)}"
            f"{'_lyrics' if with_lyrics else ''}{'' if with_emb else '_noemb'}")
     cache_dir = dcfg.get("cache_dir")
     cache = os.path.join(cache_dir, f"catalog_crs_{key}.parquet") if cache_dir else None

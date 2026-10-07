@@ -40,3 +40,6 @@ venv/
 .vscode/
 .idea/
 .DS_Store
+
+# полный датасет, скачанный с Google Drive
+/CRS dataset/

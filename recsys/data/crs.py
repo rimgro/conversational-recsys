@@ -3,17 +3,21 @@
 tracks_meta.parquet            каталог: 64k треков, теги, жанры, аудио-атрибуты, тексты, эмбеддинги MuQ
 train / test_public.parquet    строка = пользователь: история (все прослушивания до окна) + позитивы окна,
                                у каждого позитива свой запрос на русском и тип запроса (query_family)
+Каждый файл может лежать частями: train-00000-of-00078.parquet, ... (так выложен полный датасет).
 
 Один Request = один позитив: запрос -> ровно одна цель (m4a_id). 93% целей уже есть в истории
 (is_new=False), поэтому прослушанное нельзя отфильтровывать.
 """
 from __future__ import annotations
 
+import glob
 import json
-from typing import Any, Dict, List, Optional, Sequence
+import os
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from recsys.data.catalog import Catalog
@@ -31,13 +35,31 @@ _RAW_COLUMNS = ["m4a_id", "m4a_artist", "m4a_song", "m4a_album", "artist", "titl
 
 # ---------------------------------------------------------------- каталог
 
-def read_tracks_meta(path: str, with_lyrics: bool = False, with_embeddings: bool = True) -> pd.DataFrame:
-    """Читает только нужные колонки (в файле их ~100, включая длинные тексты)."""
+def parquet_files(directory: str, name: str) -> List[str]:
+    """<name>.parquet или его части <name>-00000-of-000NN.parquet."""
+    single = os.path.join(directory, f"{name}.parquet")
+    if os.path.exists(single):
+        return [single]
+    parts = sorted(glob.glob(os.path.join(directory, f"{name}-*.parquet")))
+    if not parts:
+        raise FileNotFoundError(f"нет {single} и частей {name}-*.parquet в {directory}")
+    return parts
+
+
+def _read_table(path: Union[str, List[str]], columns: Optional[List[str]] = None) -> pa.Table:
+    files = [path] if isinstance(path, str) else list(path)
+    return pa.concat_tables([pq.read_table(f, columns=columns) for f in files])
+
+
+def read_tracks_meta(path: Union[str, List[str]], with_lyrics: bool = False,
+                     with_embeddings: bool = True) -> pd.DataFrame:
+    """Читает только нужные колонки (в файле их ~100, включая длинные тексты). path — файл или список частей."""
     wanted = _RAW_COLUMNS + EXTRA_COLUMNS + (["lyrics"] if with_lyrics else [])
     if not with_embeddings:
         wanted.remove("muq_embedding")
-    present = set(pq.read_schema(path).names)
-    return pq.read_table(path, columns=[c for c in wanted if c in present]).to_pandas()
+    first = path if isinstance(path, str) else path[0]
+    present = set(pq.read_schema(first).names)
+    return _read_table(path, columns=[c for c in wanted if c in present]).to_pandas()
 
 
 def _parse_tag_weights(raw: Any, max_tags: int):
@@ -82,13 +104,23 @@ def catalog_from_meta(meta: pd.DataFrame, max_tags: int = 20) -> Catalog:
 
 # ---------------------------------------------------------------- сплиты
 
-def read_split(path: str, n_users: Optional[int] = None, seed: int = 42) -> pd.DataFrame:
-    """Сэмпл пользователей до перевода в pandas: полная история в pandas занимает гигабайты."""
-    table = pq.read_table(path)
-    if n_users is not None and n_users < table.num_rows:
-        idx = np.sort(np.random.default_rng(seed).choice(table.num_rows, size=n_users, replace=False))
-        table = table.take(idx)
-    return table.to_pandas()
+def read_split(path: Union[str, List[str]], n_users: Optional[int] = None, seed: int = 42) -> pd.DataFrame:
+    """Сэмпл пользователей до перевода в pandas: полная история в pandas занимает гигабайты.
+    path — файл или список частей; части читаются по одной, из каждой берутся только выбранные строки."""
+    files = [path] if isinstance(path, str) else list(path)
+    sizes = [pq.read_metadata(f).num_rows for f in files]
+    total = sum(sizes)
+    idx = np.arange(total)
+    if n_users is not None and n_users < total:
+        idx = np.sort(np.random.default_rng(seed).choice(total, size=n_users, replace=False))
+    tables, offset = [], 0
+    for f, n in zip(files, sizes):
+        local = idx[(idx >= offset) & (idx < offset + n)] - offset
+        if len(local):
+            t = pq.read_table(f)
+            tables.append(t if len(local) == n else t.take(local))
+        offset += n
+    return pa.concat_tables(tables).to_pandas()
 
 
 def aggregate_history(history: Sequence[str], history_ts: Optional[Sequence[int]] = None) -> List[HistoryItem]:
