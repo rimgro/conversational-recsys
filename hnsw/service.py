@@ -1,12 +1,13 @@
 """HTTP API for the HNSW (embedding) candidate generator.
 
-    HNSW_INDEXES_DIR=../indexes/hnsw uvicorn service:app --port 8001     # standalone
+    HNSW_INDEXES_DIR=../indexes/hnsw uvicorn service:app --port 8002
 
-In the candidate-generator image it is mounted next to BM25 (candgen/main.py).
+Runs as its own process, independent of BM25 (on the VPS: deploy/recsys-hnsw.service).
+API contract: docs/candgen_api.md.
 
 Env: HNSW_INDEXES_DIR (every subdirectory with a meta.json is an index named
-after the subdirectory; 'audio' is the default), HNSW_API_KEY (falls back to
-BM25_API_KEY; empty disables auth). Indexes are loaded once at startup.
+after the subdirectory; 'audio' is the default), HNSW_API_KEY (empty disables
+auth). Indexes are loaded once at startup.
 
 POST /hnsw/search  {"track_ids": [...], "weights": [...], "k": 200, "exclude_ids": [...], "index": "audio"}
                or  {"vector": [...], "k": 200, ...}
@@ -66,12 +67,12 @@ def load_indexes(root) -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Loads indexes into app.state.hnsw_models; an empty/missing dir disables HNSW (BM25 still works)."""
+    """Loads indexes into app.state.hnsw_models; an empty/missing dir is allowed (/hnsw/search -> 503)."""
     root = os.environ.get('HNSW_INDEXES_DIR', '')
     app.state.hnsw_models = load_indexes(root) if root and Path(root).is_dir() else {}
     if not app.state.hnsw_models:
         log.warning('No HNSW indexes in %r: /hnsw/search will return 503', root)
-    app.state.hnsw_api_key = os.environ.get('HNSW_API_KEY', os.environ.get('BM25_API_KEY', ''))
+    app.state.hnsw_api_key = os.environ.get('HNSW_API_KEY', '')
     for name, model in app.state.hnsw_models.items():
         log.info('Loaded HNSW index %s (%s, %d items)', name, model['index_version'], len(model['item_ids']))
     yield

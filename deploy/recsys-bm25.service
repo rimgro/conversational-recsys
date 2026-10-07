@@ -1,0 +1,21 @@
+# Кандген bm25 на VPS, порт 8001. Установка: deploy/README.md
+#   sudo cp deploy/recsys-bm25.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#   sudo systemctl enable --now recsys-bm25
+[Unit]
+Description=recsys candidate generator: bm25 (port 8001)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=recsys
+WorkingDirectory=/opt/recsys/bm25
+Environment=BM25_INDEXES_DIR=/opt/recsys/indexes/bm25
+# ключ и прочие переменные (необязательно): /etc/recsys/bm25.env
+EnvironmentFile=-/etc/recsys/bm25.env
+# один процесс: каждый воркер uvicorn держит в памяти свою копию индексов
+ExecStart=/opt/recsys/.venv-bm25/bin/uvicorn app:app --host 0.0.0.0 --port 8001
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+# Кандген hnsw на VPS, порт 8002. Установка: deploy/README.md
+#   sudo cp deploy/recsys-hnsw.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#   sudo systemctl enable --now recsys-hnsw
+[Unit]
+Description=recsys candidate generator: hnsw (port 8002)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=recsys
+WorkingDirectory=/opt/recsys/hnsw
+Environment=HNSW_INDEXES_DIR=/opt/recsys/indexes/hnsw
+# ключ и прочие переменные (необязательно): /etc/recsys/hnsw.env
+EnvironmentFile=-/etc/recsys/hnsw.env
+# один процесс: каждый воркер uvicorn держит в памяти свою копию индексов
+ExecStart=/opt/recsys/.venv-hnsw/bin/uvicorn service:app --host 0.0.0.0 --port 8002
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

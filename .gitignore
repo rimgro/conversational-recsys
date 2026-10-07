@@ -28,6 +28,7 @@ __pycache__/
 
 # окружения и секреты
 .venv/
+.venv-*/
 venv/
 .env
 .env.*
