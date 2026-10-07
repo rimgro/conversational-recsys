@@ -27,7 +27,6 @@ from recsys.schemas import HistoryItem, Message, Request
 EXTRA_COLUMNS = [
     "release_year", "lang", "is_instrumental", "artist_country", "pseudo_caption",
     "spotify_popularity", "energy", "valence", "tempo", "danceability",
-    "vk_sad_mood_proba", "vk_happy_mood_proba", "vk_calm_mood_proba", "vk_angry_mood_proba",
 ]
 _RAW_COLUMNS = ["m4a_id", "m4a_artist", "m4a_song", "m4a_album", "artist", "title",
                 "m4a_genres_full", "lastfm_tag_weights", "onion_listens", "muq_embedding"]

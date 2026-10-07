@@ -55,7 +55,6 @@ retrieval:                     # enabled: false выключает источн�
   history:  {enabled: true, top_k: 200, n_tags: 15, n_artists: 5}
   audio:    {enabled: true, top_k: 200}                        # эмбеддинги MuQ
   popular:  {enabled: true, top_k: 100}
-  hnsw:     {enabled: false, top_k: 200}                       # ЗАГЛУШКА текстового семантического поиска
   # кандгены на VPS (recsys/retrieval/remote.py), адреса в candgen.bm25 / candgen.hnsw
   bm25_genres: {enabled: false, type: bm25_api, index: genres, query: tags, top_k: 200}
   bm25_tags:   {enabled: false, type: bm25_api, index: tags, query: tags, top_k: 200}
@@ -66,7 +65,7 @@ fusion:
   rrf_k: 60
   top_n: 500                   # сколько отдаём в ранкер
   exclude_listened: false      # 93% целей в датасете — повторные прослушивания, их нельзя выкидывать
-  weights: {bm25: 1.0, relisten: 1.0, title: 1.5, lyrics: 1.5, history: 0.5, audio: 0.5, popular: 0.2, hnsw: 0.1,
+  weights: {bm25: 1.0, relisten: 1.0, title: 1.5, lyrics: 1.5, history: 0.5, audio: 0.5, popular: 0.2,
             bm25_genres: 0.7, bm25_tags: 0.7, bm25_title: 1.0, hnsw_audio: 0.5}
   no_query_boost: {relisten: 1.5, history: 2.0, audio: 1.5, popular: 1.5, hnsw_audio: 1.5}   # запрос пустой («ещё»)
   cold_start_boost: {popular: 2.0}                                         # истории нет
@@ -77,7 +76,7 @@ ranker:
   api_url: null               # для type: api
   api_key: null
   timeout: 2.0                # секунды; при ошибке API -> порядок RRF
-  weights: {}                  # для heuristic, см. recsys/ranking/heuristic.py
+  weights: {}                  # для heuristic, см. HeuristicRanker в recsys/ranking.py
 
 diversity:
   max_per_artist: 0            # 0 = без ограничения. Ограничение даёт разнообразие, но на офлайн-метриках

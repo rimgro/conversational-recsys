@@ -29,8 +29,8 @@
 | `history` | list[str] | **все** прослушивания пользователя до начала окна, `m4a_id` в хронологическом порядке (повторы = повторные прослушивания) |
 | `history_ts` | list[int] | время каждого прослушивания из `history` |
 | `history_len` | int | длина истории |
-| `user_profile` | str | текстовое описание пользователя: демография (если есть: пол, возраст, страна, год регистрации) + описание по истории до окна: с какого года слушает, объём, топ-10 артистов, топ жанров, доли эпох и языков, артисты последних 3 месяцев |
-| `user_demographics` | str (JSON) / null | `age`, `gender` (m/f), `country`, `created` (регистрация на Last.fm) из LFM-2b; есть у ~63% пользователей |
+| `user_profile` | str | текстовое описание пользователя по истории до начала окна: с какого года слушает, число прослушиваний, треков и артистов, топ-10 артистов, топ-8 жанров, доли эпох и языков песен, топ-5 артистов последних 3 месяцев |
+| `user_demographics` | struct / null | `age` (int), `gender` (`m`/`f`), `country` (ISO-код) из LFM-2b; есть у ~63% пользователей, иначе null |
 | `n_positives` | int | число позитивов в строке |
 | `positives` | list[dict] | все треки, прослушанные в окне (уникальные), по времени первого прослушивания; поля ниже |
 
@@ -65,7 +65,7 @@
 | `lang` | язык текста (ISO-код; `INTRUMENTAL` — без слов) |
 | `is_instrumental` | без вокала |
 | `m4a_genres_full`, `m4a_tags_full` | жанры и теги Music4All (через запятую) |
-| `spotify_popularity`, `danceability`, `energy`, `valence`, `tempo`, `key`, `mode`, `duration_ms` | аудиоатрибуты Spotify API |
+| `spotify_popularity`, `danceability`, `energy`, `valence`, `tempo`, `key`, `mode`, `duration_ms` | популярность и аудиоатрибуты Spotify API (Music4All, 2019) |
 | `lyrics` | полный текст песни |
 | `lyrics_processed` | лемматизированный текст из Music4All-Onion |
 
@@ -92,38 +92,15 @@
 |---|---|
 | `muq_embedding` | MuQ, 128 float, L2-нормирован |
 
-Признаки из каталога VK (без идентификаторов VK; заполнены у ~80–98% треков):
+Свежая выгрузка Spotify API по совпавшей записи (заполнено у ~13% треков):
 
 | колонка | описание |
 |---|---|
-| `vk_title`, `vk_subtitle`, `vk_main_artists`, `vk_artist_names`, `vk_featured_artists` | название, подзаголовок (версия/ремикс), артисты в каталоге VK |
-| `vk_duration` | длительность версии в VK, с |
-| `vk_release_date` | дата релиза в VK (unix) |
-| `vk_album_type` | тип релиза (single / album / …) |
-| `vk_is_cover`, `vk_is_well_known`, `vk_is_children_track` | флаги каталога |
-| `vk_sad_mood_proba`, `vk_happy_mood_proba`, `vk_calm_mood_proba`, `vk_angry_mood_proba`, `vk_happy_russian_mood_proba` | вероятности настроений (аудиоклассификатор) |
-| `vk_pop_genre_proba`, `vk_rock_genre_proba`, `vk_hip_hop_genre_proba`, `vk_electronic_genre_proba` | вероятности жанров (аудиоклассификатор) |
-| `vk_instrumental_proba` | вероятность инструментала |
-| `vk_en_text_coef` | доля английского в тексте |
-| `vk_tags_probabilities` | вектор вероятностей тегов аудиоклассификатора |
-
-Признаки из таблицы соответствий Spotify↔VK (заполнены у ~13% треков):
-
-| колонка | описание |
-|---|---|
-| `vkpl_sp_id`, `vkpl_sp_title`, `vkpl_isrc` | Spotify ID, название и ISRC совпавшей записи |
-| `vkpl_vk_title`, `vkpl_vk_title_lang`, `vkpl_vk_genres`, `vkpl_vk_genre_cnt`, `vkpl_vk_original_release_date`, `vkpl_original_release_date` | название, язык, жанры каталога VK, даты оригинального релиза |
-| `vkpl_sp_genres`, `vkpl_sp_genre_cnt` | жанры Spotify |
-| `vkpl_popularity`, `vkpl_danceability`, `vkpl_energy`, `vkpl_valence`, `vkpl_tempo`, `vkpl_key`, `vkpl_mode`, `vkpl_loudness`, `vkpl_speechiness`, `vkpl_acousticness`, `vkpl_instrumentalness`, `vkpl_liveness`, `vkpl_time_signature`, `vkpl_duration_ms`, `vkpl_af_null_response` | аудиоатрибуты Spotify (свежая выгрузка) |
-| `vkpl_language`, `vkpl_artist_cnt`, `vkpl_playlist_cnt`, `vkpl_n_rows` | язык, число артистов, число плейлистов с треком, число совпавших строк |
-
-Служебные поля сопоставления с аудио-каталогом:
-
-| колонка | описание |
-|---|---|
-| `match_source` | как найдена аудио-версия: `spotify` / `isrc` / `name` (название + артист) |
-| `n_candidates`, `n_emb_candidates` | сколько кандидатов-версий нашлось / из них с эмбеддингом |
-| `dur_diff_s` | разница длительности Music4All и выбранной версии, с (>30 с — вероятно другая версия: live, ремикс) |
+| `spotify_id_2`, `spotify_title`, `isrc` | Spotify ID, название и ISRC совпавшей записи (`spotify_id_2` может отличаться от `spotify_id` из Music4All — другая версия релиза) |
+| `spotify_release_date` | дата оригинального релиза |
+| `spotify_genres`, `spotify_genre_cnt` | жанры артиста в Spotify |
+| `spotify2_popularity`, `spotify2_danceability`, `spotify2_energy`, `spotify2_valence`, `spotify2_tempo`, `spotify2_key`, `spotify2_mode`, `spotify2_loudness`, `spotify2_speechiness`, `spotify2_acousticness`, `spotify2_instrumentalness`, `spotify2_liveness`, `spotify2_time_signature`, `spotify2_duration_ms` | популярность и аудиоатрибуты Spotify API (свежие; аудиоатрибуты без префикса — выгрузка Music4All 2019 года) |
+| `spotify2_language`, `spotify2_artist_cnt`, `spotify2_playlist_cnt` | язык, число артистов, в скольких плейлистах трек |
 
 ## Синтетические запросы
 

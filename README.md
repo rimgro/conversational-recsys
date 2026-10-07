@@ -75,7 +75,6 @@ VPS                                                DataSphere: recsys/ + ноу�
 | `history` | новые треки по профилю тегов и артистов | discovery (`is_new`) |
 | `audio` | эмбеддинги MuQ, ближайшие к центру вкуса | discovery, audio_attributes |
 | `popular` | популярное в жанрах пользователя | холодный старт |
-| `hnsw` | **заглушка** текстового семантического поиска (выключена) | — |
 | `bm25_genres`, `bm25_tags`, `bm25_title` | BM25 с VPS (`type: bm25_api`) | как `bm25` / `title` |
 | `hnsw_audio` | эмбеддинги с VPS (`type: hnsw_api`) | как `audio` |
 
@@ -94,7 +93,6 @@ deploy/                    VPS: systemd-юниты, build_indexes.sh, run_local.
 docs/dataset.md            описание датасета
 docs/candgen_api.md        API кандгенов (контракт с нашей частью)
 examples/candgen.ipynb     проверка BM25 и HNSW руками
-examples/*.json            примеры запросов (id треков из синтетики)
 recsys/
   schemas.py      контракты между шагами
   config.py       загрузка YAML + overrides (предупреждает об опечатках в ключах)
@@ -123,7 +121,7 @@ tests/
 ## Как заменить заглушку
 
 - **Ранкер**: `rank(features, ctx) -> DataFrame` с колонкой `rank_score`; признаки в `build_features` (`ranking.py`). Внешний сервис: `ranker.type: api`.
-- **Текстовый семантический поиск**: класс с `name = "hnsw"` и `search(ctx) -> list[Candidate]` (наследник `BaseRetriever`), лучше в отдельном файле `retrieval/hnsw.py`; зарегистрировать в `build_retrievers` (`retrieval/sources.py`).
+- **Новый источник кандидатов**: наследник `BaseRetriever` с `search(ctx) -> list[Candidate]` в `retrieval/`; зарегистрировать в `build_retrievers` (`retrieval/sources.py`) и включить в `configs/default.yaml`.
 - **LLM**: `llm.type: local`, `summarizer.type: llm`, `explainer.type: llm`.
 
 Метрики на синтетике завышены: запросы строятся из тех же тегов, по которым ищем. Они годятся для сравнения

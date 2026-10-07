@@ -8,7 +8,6 @@ lyrics    строчка текста песни (нужен data.crs.with_lyric
 history   профиль тегов и артистов из истории -> BM25 (новые треки во вкусе пользователя)
 audio     эмбеддинги MuQ: ближайшие к «центру вкуса» истории
 popular   популярное в жанрах пользователя; холодный старт
-hnsw      ЗАГЛУШКА текстового семантического поиска: выборка с перекосом в популярное
 
 Треки из ctx.banned_ids источники не возвращают, чтобы не тратить на них top_k.
 """
@@ -27,7 +26,7 @@ from recsys.retrieval.bm25 import (BM25Index, artist_token, build_bm25_index, bu
                                    tag_token, year_token)
 from recsys.ru import STOPWORDS_RU, translit
 from recsys.schemas import Candidate, Context
-from recsys.text import is_cyrillic, stable_hash, tokenize
+from recsys.text import is_cyrillic, tokenize
 
 
 class BaseRetriever(ABC):
@@ -255,27 +254,6 @@ class PopularRetriever(BaseRetriever):
         return self.to_candidates(order, self._pop[order])
 
 
-class HNSWStubRetriever(BaseRetriever):
-    """ЗАГЛУШКА. Seed из запроса и user_id: одинаковый запрос -> одинаковый ответ."""
-    name = "hnsw"
-
-    def __init__(self, catalog: Catalog, top_k: int = 200, popularity_power: float = 0.5):
-        super().__init__(catalog, top_k)
-        pop = catalog.df["popularity"].to_numpy(dtype=np.float64)
-        p = np.power(np.maximum(pop, 0.0) + 1.0, popularity_power)
-        self._p = p / p.sum()
-
-    def search(self, ctx: Context, top_k: Optional[int] = None) -> List[Candidate]:
-        p = self._p.copy()
-        p[self.catalog.positions(ctx.banned_ids)] = 0.0
-        k = min(top_k or self.top_k, int((p > 0).sum()))
-        if k == 0:
-            return []
-        rng = np.random.default_rng(stable_hash(f"{ctx.summary.query}|{ctx.request.user_id}"))
-        pos = rng.choice(len(p), size=k, replace=False, p=p / p.sum())
-        return self.to_candidates(pos, 1.0 / np.arange(1, k + 1))  # «косинус» убывает с рангом
-
-
 def build_retrievers(cfg: Dict[str, Any], catalog: Catalog,
                      bm25_index: Optional[BM25Index] = None) -> List[BaseRetriever]:
     """Источники из cfg['retrieval'] с enabled: true, в порядке конфига.
@@ -308,8 +286,6 @@ def build_retrievers(cfg: Dict[str, Any], catalog: Catalog,
                                         n_tags=c.get("n_tags", 15), n_artists=c.get("n_artists", 5)))
         elif kind == "popular":
             out.append(PopularRetriever(catalog, top_k=k))
-        elif kind == "hnsw":
-            out.append(HNSWStubRetriever(catalog, top_k=k))
         elif kind == "relisten":
             out.append(RelistenRetriever(catalog, bm25_index, top_k=k,
                                          history_weight=c.get("history_weight", 0.3)))

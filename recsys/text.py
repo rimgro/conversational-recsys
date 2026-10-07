@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-import hashlib
 import re
 from typing import Iterable, Iterator, List, Tuple
 
@@ -100,7 +99,3 @@ def tag_matches(query_tag: str, track_tags: Iterable[str]) -> bool:
     """
     q = f" {query_tag} "
     return any(q in f" {t} " for t in track_tags)
-
-
-def stable_hash(text: str) -> int:
-    return int(hashlib.md5(text.encode("utf8")).hexdigest()[:8], 16)
