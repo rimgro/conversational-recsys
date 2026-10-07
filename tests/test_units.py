@@ -54,3 +54,15 @@ def test_energy_change_drops_opposite_tags(data):
                           Message("user", "now more energetic")])
     out = RuleSummarizer(data.catalog).summarize(req)
     assert out.energy == "high" and "calm" not in out.include_tags and "acoustic" in out.include_tags
+
+
+def test_config_warns_on_typo():
+    import warnings
+
+    from recsys.config import deep_update
+    base = {"ranker": {"type": "stub", "weights": {}}}
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        out = deep_update(base, {"ranker": {"tpye": "heuristic", "weights": {"rrf_score": 1.0}}})
+    assert [str(x.message) for x in w] == ["config: ключа 'ranker.tpye' нет в базовом конфиге (опечатка?)"]
+    assert out["ranker"]["type"] == "stub" and out["ranker"]["weights"] == {"rrf_score": 1.0}

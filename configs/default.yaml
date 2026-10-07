@@ -49,6 +49,7 @@ llm:
   device_map: auto
   torch_dtype: auto
   load_in_4bit: false
+  stub_response: ""           # что отвечает StubLLM (пусто -> правила/шаблон)
 
 summarizer:
   type: rule                   # rule (заглушка) | llm (фолбэк на rule)
@@ -71,7 +72,9 @@ fusion:
 ranker:
   type: stub                   # stub (порядок RRF) | heuristic | api
   top_k: 10
-  api_url: null
+  api_url: null               # для type: api
+  api_key: null
+  timeout: 2.0                # секунды; при ошибке API -> порядок RRF
   weights: {}                  # для heuristic, см. recsys/ranking/heuristic.py
 
 diversity:
@@ -80,3 +83,4 @@ diversity:
 explainer:
   type: stub                   # stub (приветствие + список) | llm
   n_describe: 10
+  max_new_tokens: 300          # для type: llm

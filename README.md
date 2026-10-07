@@ -9,7 +9,7 @@
 
 ```bash
 pip install -r requirements.txt
-pytest -q                 # 12 тестов, пайплайн целиком на синтетике
+pytest -q                 # тесты, пайплайн целиком на синтетике
 jupyter lab main.ipynb    # или открыть в DataSphere
 ```
 
@@ -20,11 +20,11 @@ jupyter lab main.ipynb    # или открыть в DataSphere
 
 | Шаг | Модуль | Реализации | Сейчас |
 |---|---|---|---|
-| 1. разбор диалога → `DialogSummary` | `dialog/` | `rule`, `llm` (фолбэк на rule) | rule |
-| 2. кандидаты | `retrieval/` | `bm25`, `hnsw` (**заглушка**), `history`, `popular` | все |
-| 3. RRF + фильтры + дедуп | `fusion/` | RRF с весами по контексту | настоящий |
-| 4. ранкер | `ranking/` | `stub` (порядок RRF), `heuristic`, `api` | stub |
-| 5. описание | `explain/` | `stub` (приветствие + список), `llm` | stub |
+| 1. разбор диалога → `DialogSummary` | `dialog.py` | `rule`, `llm` (фолбэк на rule) | rule |
+| 2. кандидаты | `retrieval/sources.py` | `bm25`, `hnsw` (**заглушка**), `history`, `popular` | все |
+| 3. RRF + фильтры + дедуп | `fusion.py` | RRF с весами по контексту | настоящий |
+| 4. ранкер | `ranking.py` | `stub` (порядок RRF), `heuristic`, `api` | stub |
+| 5. описание | `explain.py` | `stub` (приветствие + список), `llm` | stub |
 
 Контракты между шагами: `recsys/schemas.py` (`Request`, `DialogSummary`, `Candidate`, `FusedCandidate`, `RankedTrack`, `Response`).
 
@@ -51,24 +51,35 @@ jupyter lab main.ipynb    # или открыть в DataSphere
 ```
 main.ipynb                 главный ноутбук
 configs/default.yaml       все параметры и переключатели заглушек
-examples/request_01.json   пример запроса
+examples/*.json            примеры запросов
 recsys/
-  schemas.py  config.py  pipeline.py  text.py
-  data/       catalog, loaders (Onion), history (профиль), dataset (наш формат), synthetic, load
-  llm/        StubLLM, LocalLLM (transformers), extract_json
-  dialog/     rule.py, llm_summarizer.py, prompts.py
-  retrieval/  bm25.py, hnsw_stub.py, history.py, popular.py
-  fusion/     rrf.py, filters.py
-  ranking/    features.py, stub.py, heuristic.py, api.py, diversity.py
-  explain/    stub.py, llm_explainer.py
-  eval/       metrics.py, evaluate.py (evaluate, compare_configs)
+  schemas.py      контракты между шагами (Request, DialogSummary, Candidate, ..., Response)
+  config.py       загрузка YAML + overrides (предупреждает об опечатках в ключах)
+  pipeline.py     пять шагов схемы
+  text.py         нормализация тегов, токенизация
+  llm.py          StubLLM, LocalLLM (transformers), extract_json
+  dialog.py       шаг 1: RuleSummarizer (заглушка), LLMSummarizer, промпты
+  retrieval/
+    bm25.py       BM25-индекс по тегам/жанрам/артисту/названию
+    sources.py    шаг 2: источники bm25, history, popular, hnsw (заглушка)
+  fusion.py       шаг 3: RRF, фильтры, веса источников
+  ranking.py      шаг 4: признаки, StubRanker, HeuristicRanker, APIRanker, не больше N треков артиста
+  explain.py      шаг 5: StubExplainer, LLMExplainer
+  eval.py         метрики, evaluate, compare_configs
+  data/
+    catalog.py    каталог треков
+    loaders.py    чтение файлов Onion и таблиц метаданных
+    history.py    история пользователя -> профиль вкуса
+    dataset.py    адаптер нашего датасета с диалогами
+    synthetic.py  синтетические данные и запросы
+    load.py       load_data(cfg): synthetic | onion | dataset
 tests/
 ```
 
 ## Как заменить заглушку
 
-- **HNSW**: класс с `name = "hnsw"` и `search(ctx) -> list[Candidate]` (наследник `BaseRetriever`), зарегистрировать в `retrieval/__init__.py`.
-- **Ранкер**: `rank(features, ctx) -> DataFrame` с колонкой `rank_score`; признаки в `ranking/features.py`. Внешний сервис: `ranker.type: api`.
+- **HNSW**: класс с `name = "hnsw"` и `search(ctx) -> list[Candidate]` (наследник `BaseRetriever`), лучше в отдельном файле `retrieval/hnsw.py`; зарегистрировать в `build_retrievers` (`retrieval/sources.py`).
+- **Ранкер**: `rank(features, ctx) -> DataFrame` с колонкой `rank_score`; признаки в `build_features` (`ranking.py`). Внешний сервис: `ranker.type: api`.
 - **LLM**: `llm.type: local`, `summarizer.type: llm`, `explainer.type: llm`.
 
 Метрики на `synthetic` и `onion` завышены: запросы строятся из тегов целей, а BM25 ищет по тем же тегам. Они годятся для сравнения вариантов, но не для оценки реального качества.
