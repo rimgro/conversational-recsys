@@ -1,7 +1,8 @@
-# Диалоговая рекомендация музыки
+# Разговорная рекомендация музыки
 
-Вход: диалог (JSON, массив сообщений, на английском) + история прослушиваний + инфо о пользователе (текст).
-Выход: top-k треков из каталога и текстовый ответ. Каталог: [Music4All-Onion](https://zenodo.org/records/6609677) + наш датасет с диалогами и названиями треков.
+Датасет **Music4All-CRS** (описание: [docs/dataset.md](docs/dataset.md)): каталог из 64k треков, история
+прослушиваний Last.fm и текстовый профиль пользователя; на каждый трек, который пользователь послушал
+в целевом месяце, есть синтетический запрос на русском. Задача: по запросу, истории и профилю найти этот трек.
 
 Схема: `scheme.png`. Главный файл: `main.ipynb`, остальное импортируется из пакета `recsys/`.
 
@@ -13,73 +14,79 @@ pytest -q                 # тесты, пайплайн целиком на с�
 jupyter lab main.ipynb    # или открыть в DataSphere
 ```
 
-В DataSphere: склонировать репозиторий в проект, открыть `main.ipynb` из корня репозитория (пути в конфиге относительные).
-Для LLM нужна GPU-конфигурация и `transformers` (раскомментировать в `requirements.txt`).
+Без данных всё работает на синтетике в формате датасета (`data.source: synthetic`). Для настоящих данных
+положить `tracks_meta.parquet`, `train.parquet`, `test_public.parquet` в `data/` и поставить `data.source: crs`.
+В DataSphere: открыть `main.ipynb` из корня репозитория; для LLM нужна GPU-конфигурация и `transformers`.
+
+## Что важно в данных
+
+- **Одна цель на запрос**, 11 типов запросов (`query_family`): exact, lyrics_recall, genre, mood, situation, era_region, ...
+  Метрики считаем по типам (`metrics_by`).
+- **93% целей — повторные прослушивания** (`is_new = False`). Поэтому прослушанное не выкидываем
+  (`fusion.exclude_listened: false`), а свою историю пользователя ищем отдельным источником `relisten`.
+- **Запросы на русском, теги на английском.** Без LLM запрос разбирается словарём `recsys/ru.py`.
 
 ## Пайплайн (`recsys/pipeline.py`)
 
-| Шаг | Модуль | Реализации | Сейчас |
-|---|---|---|---|
-| 1. разбор диалога → `DialogSummary` | `dialog.py` | `rule`, `llm` (фолбэк на rule) | rule |
-| 2. кандидаты | `retrieval/sources.py` | `bm25`, `hnsw` (**заглушка**), `history`, `popular` | все |
-| 3. RRF + фильтры + дедуп | `fusion.py` | RRF с весами по контексту | настоящий |
-| 4. ранкер | `ranking.py` | `stub` (порядок RRF), `heuristic`, `api` | stub |
-| 5. описание | `explain.py` | `stub` (приветствие + список), `llm` | stub |
+| Шаг | Модуль | Сейчас |
+|---|---|---|
+| 1. разбор запроса → `DialogSummary` | `dialog.py`, `ru.py` | правила (`rule`), `llm` с фолбэком на правила |
+| 2. кандидаты | `retrieval/sources.py` | см. ниже |
+| 3. RRF + фильтры + дедуп | `fusion.py` | настоящий |
+| 4. ранкер | `ranking.py` | `stub` (порядок RRF), `heuristic`, `api` |
+| 5. описание | `explain.py` | `stub` (приветствие + список), `llm` |
+
+Источники кандидатов:
+
+| Источник | Что делает | Для каких запросов |
+|---|---|---|
+| `bm25` | теги, жанры, артист, название, альбом, десятилетие, страна, язык | genre, mood, era_region, complex |
+| `relisten` | треки из истории пользователя по совпадению с запросом и весу в истории | все: 93% целей отсюда |
+| `title` | артист + название по триграммам, транслит кириллицы | exact |
+| `lyrics` | строчка текста песни (выключен: нужен `data.crs.with_lyrics: true`) | lyrics_recall |
+| `history` | новые треки по профилю тегов и артистов | discovery (`is_new`) |
+| `audio` | эмбеддинги MuQ, ближайшие к центру вкуса | discovery, audio_attributes |
+| `popular` | популярное в жанрах пользователя | холодный старт |
+| `hnsw` | **заглушка** текстового семантического поиска (выключена) | — |
 
 Контракты между шагами: `recsys/schemas.py` (`Request`, `DialogSummary`, `Candidate`, `FusedCandidate`, `RankedTrack`, `Response`).
-
-- **История** участвует трижды: источник `history` (профиль тегов и артистов → BM25; потом заменить на collab-HNSW), `popular` в жанрах пользователя, признаки ранкера. Прослушанное, показанное и скипнутое отфильтровывается.
-- **Исключения** из диалога (`no rap`, `without female vocalists`) работают как жёсткий фильтр на шаге 3.
-- **Несколько реплик**: `request.next_turn(response, "more energetic")` добавляет ответ и показанные треки в запрос.
-
-## Данные (`data.source` в `configs/default.yaml`)
-
-| source | Что нужно | Запросы для оценки |
-|---|---|---|
-| `synthetic` | ничего | синтетические диалоги с целями |
-| `onion` | файлы Onion в `data.onion.dir` (`id_tags_dict`, `id_genres_tf-idf`, `userid_trackid_count`) | шаблонные запросы из тегов отложенных треков |
-| `dataset` | наш датасет в `data.dataset.dir` | диалоги датасета |
-
-**Формат нашего датасета пока предполагаемый** (описан в `recsys/data/dataset.py`): `dialogs.jsonl` с полями
-`dialog_id, user_id, user_info, history, messages[{role, text}], target_track_ids` и `tracks.*` с `track_id, title, artist`.
-Если поля называются иначе, поменять `data.dataset.fields` в конфиге. Теги можно взять из Onion: `use_onion_tags: true`.
-
-Пример формата: `examples/request_01.json`. Сохранить синтетику в формате датасета: `data.synthetic.save_dir`.
 
 ## Структура
 
 ```
 main.ipynb                 главный ноутбук
-configs/default.yaml       все параметры и переключатели заглушек
-examples/*.json            примеры запросов
+configs/default.yaml       все параметры и переключатели
+docs/dataset.md            описание датасета
+examples/*.json            примеры запросов (id треков из синтетики)
 recsys/
-  schemas.py      контракты между шагами (Request, DialogSummary, Candidate, ..., Response)
+  schemas.py      контракты между шагами
   config.py       загрузка YAML + overrides (предупреждает об опечатках в ключах)
   pipeline.py     пять шагов схемы
-  text.py         нормализация тегов, токенизация
+  text.py         нормализация тегов, токенизация (латиница + кириллица)
+  ru.py           русский словарь: основы слов -> теги, страны, языки, эпохи; транслит
   llm.py          StubLLM, LocalLLM (transformers), extract_json
   dialog.py       шаг 1: RuleSummarizer (заглушка), LLMSummarizer, промпты
   retrieval/
-    bm25.py       BM25-индекс по тегам/жанрам/артисту/названию
-    sources.py    шаг 2: источники bm25, history, popular, hnsw (заглушка)
+    bm25.py       BM25-индексы: теги, триграммы названий, тексты песен
+    sources.py    шаг 2: источники кандидатов
   fusion.py       шаг 3: RRF, фильтры, веса источников
-  ranking.py      шаг 4: признаки, StubRanker, HeuristicRanker, APIRanker, не больше N треков артиста
-  explain.py      шаг 5: StubExplainer, LLMExplainer
-  eval.py         метрики, evaluate, compare_configs
+  ranking.py      шаг 4: признаки, StubRanker, HeuristicRanker, APIRanker
+  explain.py      шаг 5: StubExplainer, LLMExplainer (ответ по-русски)
+  eval.py         метрики, evaluate, metrics_by, compare_configs
   data/
-    catalog.py    каталог треков
-    loaders.py    чтение файлов Onion и таблиц метаданных
+    catalog.py    каталог треков + эмбеддинги
+    crs.py        чтение Music4All-CRS: tracks_meta -> Catalog, сплиты -> Request на каждый позитив
     history.py    история пользователя -> профиль вкуса
-    dataset.py    адаптер нашего датасета с диалогами
-    synthetic.py  синтетические данные и запросы
-    load.py       load_data(cfg): synthetic | onion | dataset
+    synthetic.py  синтетика в формате датасета
+    load.py       load_data(cfg): synthetic | crs
 tests/
 ```
 
 ## Как заменить заглушку
 
-- **HNSW**: класс с `name = "hnsw"` и `search(ctx) -> list[Candidate]` (наследник `BaseRetriever`), лучше в отдельном файле `retrieval/hnsw.py`; зарегистрировать в `build_retrievers` (`retrieval/sources.py`).
 - **Ранкер**: `rank(features, ctx) -> DataFrame` с колонкой `rank_score`; признаки в `build_features` (`ranking.py`). Внешний сервис: `ranker.type: api`.
+- **Текстовый семантический поиск**: класс с `name = "hnsw"` и `search(ctx) -> list[Candidate]` (наследник `BaseRetriever`), лучше в отдельном файле `retrieval/hnsw.py`; зарегистрировать в `build_retrievers` (`retrieval/sources.py`).
 - **LLM**: `llm.type: local`, `summarizer.type: llm`, `explainer.type: llm`.
 
-Метрики на `synthetic` и `onion` завышены: запросы строятся из тегов целей, а BM25 ищет по тем же тегам. Они годятся для сравнения вариантов, но не для оценки реального качества.
+Метрики на синтетике завышены: запросы строятся из тех же тегов, по которым ищем. Они годятся для сравнения
+вариантов и проверки, что код работает, но не для оценки реального качества.

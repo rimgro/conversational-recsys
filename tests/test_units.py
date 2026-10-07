@@ -96,3 +96,10 @@ def test_llm_summary_merge():
         "query": "american hip hop", "summary": "s"})
     assert out.include_tags == ["hip hop"] and out.countries == ["US"] and out.years == [2003]
     assert out.query == "american hip hop Suga Suga" and out.source == "llm+rule"
+
+
+def test_profile_start_year_is_not_a_taste(data):
+    req = Request(dialog=[Message("user", "джаз")],
+                  user_info="Слушает музыку с 2010 года; до периода 300 прослушиваний. Любимые жанры: folk, metal.")
+    out = RuleSummarizer(data.catalog).summarize(req)
+    assert out.user_tags == ["folk", "metal"]
