@@ -103,3 +103,10 @@ def test_profile_start_year_is_not_a_taste(data):
                   user_info="Слушает музыку с 2010 года; до периода 300 прослушиваний. Любимые жанры: folk, metal.")
     out = RuleSummarizer(data.catalog).summarize(req)
     assert out.user_tags == ["folk", "metal"]
+
+
+def test_ru_comparative_with_po():
+    from recsys.ru import lookup_stem
+    assert lookup_stem("поэнергичнее") == lookup_stem("энергичный")
+    assert lookup_stem("повеселее") == lookup_stem("веселый") and lookup_stem("побыстрее") == lookup_stem("быстрый")
+    assert lookup_stem("поэтому") is None and lookup_stem("подробнее") is None

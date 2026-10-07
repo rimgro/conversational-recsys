@@ -162,6 +162,9 @@ def lookup_stem(token: str) -> Optional[Entry]:
             if exact is not None and token not in exact:
                 continue
             return STEMS[stem]
+    # сравнительная степень с «по-» в диалоге: 'поэнергичнее', 'повеселее', 'побыстрее' -> без приставки
+    if token.startswith("по") and token.endswith(("ее", "ей")) and len(token) > 6:
+        return lookup_stem(token[2:])
     return None
 
 
