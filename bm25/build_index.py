@@ -1,117 +1,102 @@
-"""Build a BM25 index from Music4All-Onion TSV files (zenodo.org/records/15394646).
+"""Build a BM25 index from tracks_meta (.jsonl, .parquet, or a folder of tracks_meta-*.parquet shards).
 
-    python build_index.py --source onion-genres \
-        --input ../data/id_genres_tf-idf.tsv.bz2 --out indexes/genres
-    python build_index.py --source onion-tags \
-        --input ../data/id_tags_dict.tsv.bz2 --out indexes/tags
+    python build_index.py --input ../data/tracks_meta.jsonl --field m4a_genres_full --out indexes/genres
+    python build_index.py --input ../data/tracks_meta.jsonl --field m4a_tags_full --out indexes/tags
+    python build_index.py --input ../data/tracks_meta.jsonl --field m4a_artist m4a_song --out indexes/title
 
-Ids are Music4All `id`. Every source becomes a table [id, list of terms]:
-rows without an id are dropped, duplicate ids are merged by uniting their
-terms, tracks without terms stay as empty documents. Then the index is trained
-and saved with build stats in meta.json.
+The index is named after its output folder; the service default is 'genres'.
+A track's terms are the words of the chosen field(s) (see bm25.py). Rows
+without an id are dropped, repeated ids keep their first row.
 """
 import argparse
-import ast
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from bm25 import save_bm25, train_bm25
 
-
-def _union(lists):
-    """Concatenate lists, dropping repeats, keeping first-seen order."""
-    return list(dict.fromkeys(g for genres in lists for g in genres))
+ID_COL = 'm4a_id'
 
 
-def _require(df, cols, name):
-    missing = [c for c in cols if c not in df.columns]
-    if missing:
-        raise ValueError(f'{name} lacks columns {missing}; has {list(df.columns)}')
+def _terms(cell):
+    if isinstance(cell, (list, tuple, np.ndarray)):
+        return [str(x) for x in cell]
+    return [] if pd.isna(cell) else [str(cell)]
 
 
-def _finalize(items, feature_col, stats):
-    """Drop null ids, merge duplicate ids, count stats."""
-    null_ids = items['id'].isna()
+def _read(path, keep):
+    """Yield DataFrames with the `keep` columns, one per file."""
+    path = Path(path)
+    files = sorted(path.glob('tracks_meta-*.parquet')) if path.is_dir() else [path]
+    if not files:
+        raise ValueError(f'No tracks_meta-*.parquet files in {path}')
+    for f in files:
+        if f.suffix == '.parquet':
+            import pyarrow.parquet as pq
+            names = pq.read_schema(f).names
+        else:
+            with open(f, encoding='utf-8') as fh:
+                names = list(json.loads(next(l for l in fh if l.strip())))
+        missing = [c for c in keep if c not in names]
+        if missing:
+            raise ValueError(f'{f} lacks columns {missing}')
+        if f.suffix == '.parquet':
+            yield pd.read_parquet(f, columns=keep)
+        else:
+            with open(f, encoding='utf-8') as fh:
+                records = [json.loads(l) for l in fh if l.strip()]
+            yield pd.DataFrame([{c: r.get(c) for c in keep} for r in records],
+                               columns=keep)
+
+
+def load_items(path, fields):
+    """Read tracks_meta into [m4a_id, terms]; returns (items, stats)."""
+    keep = [ID_COL, *fields]
+    raw = pd.concat(_read(path, keep), ignore_index=True)
+    items = pd.DataFrame({
+        ID_COL: raw[ID_COL],
+        'terms': [[t for cell in row for t in _terms(cell)]
+                  for row in raw[fields].itertuples(index=False, name=None)]})
+
+    stats = {'n_rows': len(items)}
+    null_ids = items[ID_COL].isna()
     stats['n_dropped_null_ids'] = int(null_ids.sum())
-    items = items[~null_ids].copy()
-    items['id'] = items['id'].astype(str)
-    n_rows = len(items)
-    items = (items.groupby('id', sort=False)[feature_col]
-             .agg(_union).reset_index())
-    stats['n_merged_duplicates'] = n_rows - len(items)
+    items = items[~null_ids]
+    stats['n_dropped_duplicate_ids'] = int(items[ID_COL].duplicated().sum())
+    items = items.drop_duplicates(ID_COL).reset_index(drop=True)
+    items[ID_COL] = items[ID_COL].astype(str)
     stats['n_items'] = len(items)
-    stats['n_empty_docs'] = int(sum(len(g) == 0 for g in items[feature_col]))
+    stats['n_empty_docs'] = int(sum(not any(t.strip() for t in ts)
+                                    for ts in items['terms']))
     return items, stats
-
-
-def items_from_genre_matrix(matrix: pd.DataFrame, feature_col: str = 'genres'):
-    """Onion id_genres_tf-idf: wide [id, <genre>...] -> genres with weight > 0."""
-    _require(matrix, ['id'], 'genre matrix')
-    genre_names = np.array([c for c in matrix.columns if c != 'id'])
-    values = matrix[genre_names].to_numpy(dtype=float)
-    genres = [list(genre_names[np.flatnonzero(row > 0)]) for row in values]
-    items = pd.DataFrame({'id': matrix['id'], feature_col: genres})
-    return _finalize(items, feature_col, {})
-
-
-def items_from_tag_dicts(tags: pd.DataFrame, feature_col: str = 'tags',
-                         min_weight: float = 0):
-    """Onion id_tags_dict: [id, "{'tag': weight}"] -> tags with weight >= min_weight."""
-    _require(tags, ['id'], 'tag file')
-    if len(tags.columns) != 2:
-        raise ValueError(f'tag file must have 2 columns; has {list(tags.columns)}')
-    parsed = []
-    for row, cell in enumerate(tags[tags.columns[1]]):
-        try:
-            d = ast.literal_eval(cell) if isinstance(cell, str) else {}
-        except (SyntaxError, ValueError):
-            raise ValueError(f'Invalid tag dict at row {row}') from None
-        if not isinstance(d, dict):
-            raise ValueError(f'Invalid tag dict at row {row}')
-        parsed.append([t for t, w in d.items() if w >= min_weight])
-    items = pd.DataFrame({'id': tags['id'], feature_col: parsed})
-    return _finalize(items, feature_col, {'min_weight': min_weight})
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    parser.add_argument('--source', required=True,
-                        choices=['onion-genres', 'onion-tags'])
-    parser.add_argument('--input', required=True, help='the .tsv(.bz2) file')
+    parser.add_argument('--input', required=True,
+                        help='tracks_meta.jsonl / .parquet / folder of shards')
+    parser.add_argument('--field', required=True, nargs='+',
+                        help='column(s) to index, e.g. m4a_genres_full')
     parser.add_argument('--out', required=True, help='output index directory')
-    # onion-tags only: keep tags with weight >= this (see warning.md).
-    parser.add_argument('--min-weight', type=float, default=0,
-                        help=argparse.SUPPRESS)
     parser.add_argument('--k1', type=float, default=1.2)
     parser.add_argument('--b', type=float, default=0.75)
     args = parser.parse_args(argv)
 
-    if args.source == 'onion-genres':
-        feature_col = 'genres'
-        items, stats = items_from_genre_matrix(
-            pd.read_csv(args.input, sep='\t', dtype={'id': str}), feature_col)
-    else:
-        feature_col = 'tags'
-        items, stats = items_from_tag_dicts(
-            pd.read_csv(args.input, sep='\t', dtype=str), feature_col,
-            args.min_weight)
-
-    model = train_bm25(items, k1=args.k1, b=args.b,
-                       feature_col=feature_col, id_col='id')
+    feature_col = '+'.join(args.field)
+    items, stats = load_items(args.input, args.field)
+    model = train_bm25(items.rename(columns={'terms': feature_col}), k1=args.k1,
+                       b=args.b, feature_col=feature_col, id_col=ID_COL)
     stats['vocab_size'] = len(model['vocab'])
-    info = {'source': args.source, 'input_file': args.input,
+    info = {'input_file': args.input, 'fields': args.field,
             'built_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
             **stats}
     version = save_bm25(model, args.out, info=info)
 
     for key, value in info.items():
         print(f'{key}: {value}')
-    df = np.diff(model['index'].indptr)
-    terms = np.array(list(model['vocab']))  # vocab values are 0..n-1 in order
-    top = np.argsort(-df, kind='stable')[:20]
-    print('top terms by df:', ', '.join(f'{terms[i]}={df[i]}' for i in top))
     print(f'index_version: {version}')
     print(f'saved to {args.out}')
 
