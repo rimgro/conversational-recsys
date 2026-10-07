@@ -4,27 +4,34 @@
 прослушиваний Last.fm и текстовый профиль пользователя; на каждый трек, который пользователь послушал
 в целевом месяце, есть синтетический запрос на русском. Задача: по запросу, истории и профилю найти этот трек.
 
-Схема: `scheme.png`. Главный файл: `main.ipynb`, остальное импортируется из пакета `recsys/`.
+Схема: `scheme.png`. Код — в пакете `recsys/`, ноутбуки только запускают его:
+
+| Ноутбук | Для чего |
+|---|---|
+| `inference.ipynb` | запрос пользователя → ответ и треки; следующая реплика |
+| `main.ipynb` | эксперименты: разбор шагов, метрики по типам запросов, сравнение вариантов, LLM |
+| `examples/candgen.ipynb` | проверка сервисов BM25 и HNSW руками: какие запросы и что они отвечают |
 
 ## Запуск
 
 ```bash
 pip install -r requirements.txt
 pytest -q                 # тесты, пайплайн целиком на синтетике (с FastAPI ещё и против настоящих bm25/ и hnsw/)
-jupyter lab main.ipynb    # или открыть в DataSphere
+jupyter lab inference.ipynb   # или открыть в DataSphere
 ```
 
 С кандгенами на VPS: поднять их по [deploy/README.md](deploy/README.md), задать `BM25_URL` и `HNSW_URL`,
 в ноутбуке поставить `USE_CANDGEN = True`.
 
-Без данных всё работает на синтетике в формате датасета (`data.source: synthetic`). Для настоящих данных
-положить `tracks_meta.parquet`, `train.parquet`, `test_public.parquet` в `data/` и поставить `data.source: crs`.
-В DataSphere: открыть `main.ipynb` из корня репозитория; для LLM нужна GPU-конфигурация и `transformers`.
+Без данных всё работает на синтетике в формате датасета (`data.source: synthetic`). Настоящие данные:
+`tracks_meta`, `train`, `test_public` — целиком (`train.parquet`) или частями (`train-00000-of-00078.parquet`, так
+выложен полный датасет) в одной папке, например `data/full/`; в ноутбуке `DATA = "crs"`, `DATA_DIR = "data/full"`.
+В DataSphere: открыть ноутбук из корня репозитория; для LLM нужна GPU-конфигурация и `transformers`.
 
 ## Кандгены на VPS
 
 ```
-VPS                                                DataSphere: recsys/ + main.ipynb
+VPS                                                DataSphere: recsys/ + ноутбуки
   :8001  bm25/  POST /bm25/search  genres|tags|title   разбор запроса -> локальные источники (relisten, title,
   :8002  hnsw/  POST /hnsw/search  audio (MuQ)  <---     history, popular) + HTTP к VPS -> RRF -> ранкер -> ответ
   индексы строятся на VPS из tracks_meta
@@ -77,7 +84,8 @@ VPS                                                DataSphere: recsys/ + main.ip
 ## Структура
 
 ```
-main.ipynb                 главный ноутбук
+inference.ipynb            инференс: запрос -> ответ
+main.ipynb                 эксперименты и метрики
 configs/default.yaml       все параметры и переключатели
 configs/candgen.yaml       надстройка: BM25 и HNSW с VPS по HTTP
 bm25/                      кандген BM25: индекс, сборка, FastAPI
@@ -85,6 +93,7 @@ hnsw/                      кандген HNSW: индекс эмбеддинг�
 deploy/                    VPS: systemd-юниты, build_indexes.sh, run_local.sh (то же локально), check.py, инструкция
 docs/dataset.md            описание датасета
 docs/candgen_api.md        API кандгенов (контракт с нашей частью)
+examples/candgen.ipynb     проверка BM25 и HNSW руками
 examples/*.json            примеры запросов (id треков из синтетики)
 recsys/
   schemas.py      контракты между шагами

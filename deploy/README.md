@@ -20,7 +20,10 @@ sh deploy/run_local.sh data/tracks_meta.parquet                     # строи
 python deploy/check.py                                              # в другом терминале: health, поиск, общие id
 ```
 
-Дальше `main.ipynb` с `USE_CANDGEN = True` (адреса по умолчанию — localhost:8001 и :8002).
+Вместо `tracks_meta.parquet` можно передать папку с частями `tracks_meta-*.parquet` (так выложен полный датасет),
+например `data/full`. Посмотреть запросы и ответы руками — `examples/candgen.ipynb`.
+
+Дальше `inference.ipynb` с `USE_CANDGEN = True` (адреса по умолчанию — localhost:8001 и :8002).
 Локально не проверяются только сами юниты systemd (пользователь, пути, автозапуск); на VPS их проверяет
 `systemctl status` и тот же `check.py`.
 
