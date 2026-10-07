@@ -27,8 +27,8 @@ class StubExplainer(BaseExplainer):
 
     def describe(self, tracks: List[RankedTrack], ctx: Context) -> str:
         if not tracks:
-            return "Hi! Sorry, I couldn't find anything matching your request. Could you rephrase it?"
-        greeting = "Hi! Here is what I picked for you"
+            return "Привет! К сожалению, ничего не нашлось. Попробуйте переформулировать запрос."
+        greeting = "Привет! Вот что я подобрал"
         if ctx.summary.include_tags or ctx.summary.seed_artists:
             greeting += " (" + ", ".join(ctx.summary.include_tags + ctx.summary.seed_artists) + ")"
         lines = [greeting + ":"]
@@ -40,7 +40,7 @@ class StubExplainer(BaseExplainer):
 
 
 EXPLAIN_SYSTEM = """You are a friendly music assistant in a chat.
-Write a short reply in English (3-6 sentences) presenting the recommended tracks to the user.
+Write a short reply in Russian (3-6 sentences) presenting the recommended tracks to the user.
 Mention a few tracks by artist and title and say briefly why they fit the request.
 Use ONLY the facts given below (artist, title, tags, reasons). Do not invent tracks, facts or links.
 Do not reorder or drop tracks from the list: the full list is shown to the user separately."""
@@ -60,7 +60,7 @@ class LLMExplainer(BaseExplainer):
             f"{t.rank}. {t.display_name} | tags: {', '.join(t.tags[:5])} | reasons: {'; '.join(t.reasons) or '-'}"
             for t in tracks[:self.n_describe]
         )
-        user = (f"User's last message: {last}\nRequest summary: {ctx.summary.text}\n\n"
+        user = (f"User's last message (Russian): {last}\nRequest summary: {ctx.summary.text}\n\n"
                 f"Recommended tracks:\n{items}")
         return [{"role": "system", "content": EXPLAIN_SYSTEM}, {"role": "user", "content": user}]
 

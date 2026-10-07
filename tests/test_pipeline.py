@@ -34,7 +34,7 @@ def test_llm_stub_falls_back(cfg, data):
     c = deep_update(cfg, {"summarizer": {"type": "llm"}, "explainer": {"type": "llm"}})
     pipe = Pipeline.from_config(c, data.catalog, llm=StubLLM(""))
     resp = pipe.run(Request(dialog=[Message("user", "some calm jazz")]))
-    assert resp.summary.source == "rule" and resp.text.startswith("Hi!")
+    assert resp.summary.source == "rule" and resp.text.startswith("Привет!")
 
 
 def test_evaluate(cfg, data):
@@ -81,3 +81,17 @@ def test_api_ranker_and_fallback(cfg, data):
     pipe = Pipeline.from_config(down_cfg, data.catalog)
     resp = pipe.run(data.requests[0])
     assert len(resp.tracks) > 0 and pipe.ranker.last_error
+
+
+def test_metrics_by_family_and_shared_index(cfg, data):
+    from recsys.eval import compare_configs, metrics_by
+    pipe = Pipeline.from_config(cfg, data.catalog)
+    per, _ = evaluate(pipe, data.requests[:30], verbose=False)
+    by = metrics_by(per, "query_family")
+    assert by["n"].sum() == 30 and set(by.index) <= {r.meta["query_family"] for r in data.requests}
+    # без bm25 общий индекс берётся у relisten, а не у title/lyrics
+    no_bm25 = Pipeline.from_config(deep_update(cfg, {"retrieval": {"bm25": {"enabled": False}}}), data.catalog)
+    assert no_bm25.bm25_index is no_bm25.retrievers[0].index and no_bm25.retrievers[0].name == "relisten"
+    table = compare_configs(cfg, {"a": {}, "b": {"ranker": {"type": "heuristic"}}}, data.catalog,
+                            data.requests[:20], by="query_family")
+    assert list(table.columns) == ["a", "b"] and "ALL" in table.index

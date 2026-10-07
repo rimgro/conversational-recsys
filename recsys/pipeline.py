@@ -45,7 +45,8 @@ class Pipeline:
 
     @property
     def bm25_index(self) -> Optional[BM25Index]:
-        return next((getattr(r, "index", None) for r in self.retrievers if hasattr(r, "index")), None)
+        """Общий BM25-индекс по тегам (у bm25 / relisten / history), чтобы не строить его заново."""
+        return next((r.index for r in self.retrievers if r.name in ("bm25", "relisten", "history")), None)
 
     def run(self, request: Request, debug: bool = False) -> Response:
         t: Dict[str, float] = {}

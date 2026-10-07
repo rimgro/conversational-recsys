@@ -62,7 +62,8 @@ ranker:
   weights: {}                  # для heuristic, см. recsys/ranking/heuristic.py
 
 diversity:
-  max_per_artist: 2
+  max_per_artist: 0            # 0 = без ограничения. Ограничение даёт разнообразие, но на офлайн-метриках
+                               # мешает: пользователи возвращаются к своим артистам (синтетика: hit@10 0.66 -> 0.60)
 
 explainer:
   type: stub                   # stub (приветствие + список) | llm

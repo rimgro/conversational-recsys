@@ -19,10 +19,12 @@ import pandas as pd
 
 from recsys.data.catalog import Catalog
 from recsys.schemas import Context, FusedCandidate
+from recsys.ru import decade_tag
 from recsys.text import tag_matches
 
 
 MISSING_RANK = 1000
+_DECADES = {f"{d}0s" for d in range(10)}
 
 
 def build_features(fused: List[FusedCandidate], ctx: Context, catalog: Catalog,
@@ -30,12 +32,17 @@ def build_features(fused: List[FusedCandidate], ctx: Context, catalog: Catalog,
     s, prof = ctx.summary, ctx.profile
     prof_total = sum(prof.tag_weights.values()) or 1.0
     seeds = {a.lower() for a in s.seed_artists}
+    history = {h.track_id: h.count for h in ctx.request.history}
+    countries = set(s.countries)
+    decades = {t for t in s.include_tags if t in _DECADES}
     rows = []
     for fc in fused:
         p = catalog.pos(fc.track_id)
         row = catalog.df.iloc[p]
         tags = list(row["tags"]) + list(row["genres"])
         artist = row["artist"]
+        year = row.get("release_year")
+        has_year = year is not None and not pd.isna(year) and int(year) > 1900
         q_hits = sum(tag_matches(t, tags) for t in s.include_tags)
         u_hits = sum(tag_matches(t, tags) for t in s.user_tags)
         feat = {
@@ -50,6 +57,10 @@ def build_features(fused: List[FusedCandidate], ctx: Context, catalog: Catalog,
             "artist_listened": float(prof.artist_weights.get(artist, 0.0) > 0) if artist else 0.0,
             "artist_seed": float(artist.lower() in seeds) if artist else 0.0,
             "n_tags": len(row["tags"]),
+            "in_history": float(fc.track_id in history),
+            "log_history_count": math.log1p(history.get(fc.track_id, 0.0)),
+            "country_match": float(bool(countries) and row.get("artist_country") in countries),
+            "decade_match": float(bool(decades) and has_year and decade_tag(int(year)) in decades),
         }
         for src in sources:
             feat[f"rank_{src}"] = fc.ranks.get(src, MISSING_RANK)
@@ -59,18 +70,21 @@ def build_features(fused: List[FusedCandidate], ctx: Context, catalog: Catalog,
 
 
 def reasons_for(track_id: str, ctx: Context, catalog: Catalog, max_reasons: int = 3) -> List[str]:
-    """Короткие причины для объяснения: совпавшие теги, сид-артист, знакомый артист."""
+    """Короткие причины для объяснения (по-русски): совпавшие теги, артист, история."""
     tags = catalog.tags(track_id) + catalog.genres(track_id)
     artist = catalog.artist(track_id)
-    out = [f"matches '{t}'" for t in ctx.summary.include_tags if tag_matches(t, tags)]
+    matched = [t for t in ctx.summary.include_tags if tag_matches(t, tags)]
+    out = [f"совпадает: {', '.join(matched)}"] if matched else []
     if artist and artist.lower() in {a.lower() for a in ctx.summary.seed_artists}:
-        out.append(f"by {artist}, as you asked")
+        out.append(f"это {artist}, как вы просили")
+    elif any(h.track_id == track_id for h in ctx.request.history):
+        out.append("вы уже слушали этот трек")
     elif artist and artist in ctx.profile.artist_weights:
-        out.append(f"you listen to {artist}")
+        out.append(f"вы слушаете {artist}")
     if not out:
         common = [t for t in ctx.profile.top_tags(10) if t in tags][:2]
         if common:
-            out.append("close to your taste: " + ", ".join(common))
+            out.append("близко к вашему вкусу: " + ", ".join(common))
     return out[:max_reasons]
 
 
@@ -115,6 +129,10 @@ DEFAULT_WEIGHTS: Dict[str, float] = {
     "artist_listened": 0.2,
     "log_popularity": 0.03,
     "n_sources": 0.05,
+    "in_history": 0.3,
+    "log_history_count": 0.05,
+    "country_match": 0.3,
+    "decade_match": 0.3,
 }
 
 

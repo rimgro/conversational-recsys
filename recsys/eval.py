@@ -54,6 +54,8 @@ def evaluate(pipeline: Pipeline, requests: List[Request], k: int = 10,
         rec = resp.track_ids
         row: Dict[str, Any] = {
             "request_id": req.request_id,
+            "query_family": req.meta.get("query_family"),
+            "is_new": req.meta.get("is_new"),
             f"hit@{k}": hit_rate_at_k(rec, req.target_ids, k),
             f"recall@{k}": recall_at_k(rec, req.target_ids, k),
             f"ndcg@{k}": ndcg_at_k(rec, req.target_ids, k),
@@ -68,18 +70,38 @@ def evaluate(pipeline: Pipeline, requests: List[Request], k: int = 10,
         if verbose and (i + 1) % 50 == 0:
             print(f"  {i + 1}/{len(reqs)}  {time.time() - t0:.1f} c")
     df = pd.DataFrame(rows)
-    return df, df.drop(columns=["request_id"]).mean(numeric_only=True) if len(df) else pd.Series(dtype=float)
+    metrics = df.drop(columns=["request_id", "query_family", "is_new"]) if len(df) else df
+    return df, metrics.mean(numeric_only=True) if len(df) else pd.Series(dtype=float)
+
+
+def metrics_by(per_request: pd.DataFrame, by: str = "query_family") -> pd.DataFrame:
+    """Средние метрики по группам (query_family / is_new) + число запросов в группе."""
+    cols = [c for c in per_request.columns if "@" in c]
+    out = per_request.groupby(by)[cols].mean()
+    out.insert(0, "n", per_request.groupby(by).size())
+    return out
 
 
 def compare_configs(base_cfg: Dict[str, Any], variants: Dict[str, Dict[str, Any]], catalog: Catalog,
-                    requests: List[Request], k: int = 10, llm: Optional[BaseLLM] = None) -> pd.DataFrame:
-    """Таблица метрик для нескольких вариантов конфига (BM25-индекс строится один раз)."""
+                    requests: List[Request], k: int = 10, llm: Optional[BaseLLM] = None,
+                    by: Optional[str] = None, metric: Optional[str] = None) -> pd.DataFrame:
+    """Метрики для нескольких вариантов конфига (BM25-индекс по тегам строится один раз).
+
+    by=None: строка = вариант, колонки = средние метрики.
+    by="query_family": строка = группа, колонки = варианты, значение = metric (по умолчанию hit@k).
+    """
     index = None
     out = {}
+    metric = metric or f"hit@{k}"
     for name, overrides in variants.items():
         cfg = deep_update(base_cfg, overrides)
         pipe = Pipeline.from_config(cfg, catalog, llm=llm, bm25_index=index)
         index = index or pipe.bm25_index
-        _, mean = evaluate(pipe, requests, k=k, verbose=False)
-        out[name] = mean
-    return pd.DataFrame(out).T
+        per, mean = evaluate(pipe, requests, k=k, verbose=False)
+        if by is None:
+            out[name] = mean
+        else:
+            col = metrics_by(per, by)[metric]
+            col.loc["ALL"] = mean[metric]
+            out[name] = col
+    return pd.DataFrame(out).T if by is None else pd.DataFrame(out)
