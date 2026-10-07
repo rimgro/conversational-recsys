@@ -10,6 +10,20 @@ BM25 и HNSW — два независимых сервиса на одной м
 
 Нужно: Linux с systemd, Python 3.10+ (`python3-venv`). Пути ниже — `/opt/recsys`; если другие, поправить их в `recsys-*.service`.
 
+## Проверить локально
+
+То же, что на VPS, но без systemd: оба сервиса отдельными процессами на 8001 и 8002 (команды как в юнитах).
+
+```bash
+pip install -r bm25/requirements.txt -r hnsw/requirements.txt       # Python 3.10+
+sh deploy/run_local.sh data/tracks_meta.parquet                     # строит indexes/, если их нет; Ctrl+C — стоп
+python deploy/check.py                                              # в другом терминале: health, поиск, общие id
+```
+
+Дальше `main.ipynb` с `USE_CANDGEN = True` (адреса по умолчанию — localhost:8001 и :8002).
+Локально не проверяются только сами юниты systemd (пользователь, пути, автозапуск); на VPS их проверяет
+`systemctl status` и тот же `check.py`.
+
 ## Первый запуск
 
 ```bash
@@ -31,13 +45,14 @@ sudo systemctl daemon-reload && sudo systemctl enable --now recsys-bm25 recsys-h
 sudo ufw allow 8001/tcp && sudo ufw allow 8002/tcp          # если включён ufw
 ```
 
-Проверка с VPS и из ячейки ноутбука в DataSphere:
+Проверка — на VPS, со своего компьютера и из ячейки ноутбука в DataSphere (`!python deploy/check.py ...`):
 
 ```bash
-curl http://<IP>:8001/health
-curl http://<IP>:8002/hnsw/health
-curl -X POST http://<IP>:8001/bm25/search -H 'Content-Type: application/json' -d '{"words": ["rock"], "k": 5}'
+python3 deploy/check.py http://<IP>:8001 http://<IP>:8002
 ```
+
+Он проверяет health, поиск во всех индексах и что id из BM25 находятся в HNSW (индексы из одного `tracks_meta`).
+Если с VPS работает, а из DataSphere нет — DataSphere не пускает наружу или порты закрыты файрволом.
 
 В DataSphere: переменные `BM25_URL=http://<IP>:8001`, `HNSW_URL=http://<IP>:8002`, в ноутбуке `USE_CANDGEN = True`.
 

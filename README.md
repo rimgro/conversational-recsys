@@ -82,7 +82,7 @@ configs/default.yaml       все параметры и переключател
 configs/candgen.yaml       надстройка: BM25 и HNSW с VPS по HTTP
 bm25/                      кандген BM25: индекс, сборка, FastAPI
 hnsw/                      кандген HNSW: индекс эмбеддингов, сборка, FastAPI
-deploy/                    VPS: systemd-юниты обоих сервисов, build_indexes.sh, инструкция
+deploy/                    VPS: systemd-юниты, build_indexes.sh, run_local.sh (то же локально), check.py, инструкция
 docs/dataset.md            описание датасета
 docs/candgen_api.md        API кандгенов (контракт с нашей частью)
 examples/*.json            примеры запросов (id треков из синтетики)
