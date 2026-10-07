@@ -49,6 +49,13 @@ def test_exclude_ids(client):
     assert len(r['ids']) == 1 and r['ids'] != first
 
 
+def test_exclude_ids_limit(client):
+    ok = {'words': ['pop'], 'k': 1, 'exclude_ids': [f'x{i}' for i in range(100_000)]}
+    assert search(client, ok).status_code == 200
+    ok['exclude_ids'].append('x')
+    assert search(client, ok).status_code == 422
+
+
 def test_empty_result(client):
     r = search(client, {'words': ['nothing'], 'k': 5})
     assert r.status_code == 200

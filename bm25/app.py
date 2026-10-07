@@ -28,7 +28,7 @@ log = logging.getLogger('bm25')
 DEFAULT_INDEX = 'genres'
 MAX_K = 1000
 MAX_WORDS = 256
-MAX_EXCLUDE = 10_000
+MAX_EXCLUDE = 100_000
 
 
 class SearchRequest(BaseModel):

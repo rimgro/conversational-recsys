@@ -38,7 +38,7 @@ Indexes are read once at startup: after rebuilding, `docker compose restart bm25
 ```
 
 - Ids are `m4a_id`. Words are matched exactly (lowercased, split on spaces); unknown words are ignored.
-- `k` 1..1000, `words` up to 256, `exclude_ids` up to 10 000.
+- `k` 1..1000, `words` up to 256, `exclude_ids` up to 100 000.
 - Errors: 404 unknown index, 422 invalid body, 401 bad key (only if `BM25_API_KEY` is set).
 
 ## Env
