@@ -107,6 +107,9 @@ class DialogSummary:
     seed_track_ids: List[str] = field(default_factory=list)
     mood: Optional[str] = None
     energy: Optional[str] = None         # low | medium | high
+    countries: List[str] = field(default_factory=list)   # коды стран артиста: US, GB, ...
+    languages: List[str] = field(default_factory=list)   # язык текста: en, ru, ...
+    years: List[int] = field(default_factory=list)       # конкретные годы релиза
     user_tags: List[str] = field(default_factory=list)       # предпочтения из user_info
     user_attrs: Dict[str, Any] = field(default_factory=dict)  # age, gender, country
     source: str = "rule"                 # rule | llm | llm+rule

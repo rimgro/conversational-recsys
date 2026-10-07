@@ -1,6 +1,6 @@
-"""Текстовые утилиты: нормализация тегов, токенизация, сопоставление тегов.
+"""Текстовые утилиты: нормализация тегов, токенизация (латиница + кириллица), сопоставление тегов.
 
-Всё на английском: диалоги, саммари и теги Last.fm англоязычные.
+Теги Last.fm и саммари на английском, запросы датасета на русском (см. recsys/ru.py).
 """
 from __future__ import annotations
 
@@ -44,17 +44,19 @@ no not without except avoid hate dislike dislikes don't dont never nothing exclu
 none neither nor
 """.split())
 
-_CLAUSE_SPLIT_RE = re.compile(r"[.,;!?\n]|\bbut\b|\bhowever\b|\bthough\b", re.IGNORECASE)
-_TOKEN_RE = re.compile(r"[a-z0-9]+(?:'[a-z]+)?")
+_CLAUSE_SPLIT_RE = re.compile(r"[.,;!?\n]|\b(?:but|however|though)\b|(?<![а-яё])(?:но|а|однако)(?![а-яё])",
+                              re.IGNORECASE)
+_TOKEN_RE = re.compile(r"[a-z0-9а-я]+(?:'[a-z]+)?")
+_CYRILLIC_RE = re.compile(r"[а-я]")
 
 
 def normalize_tag(tag: str) -> str:
     """'Hip-Hop' -> 'hip hop', 'Lo-Fi' -> 'lo fi', 'R&B' -> 'rnb'."""
-    t = str(tag).lower().strip()
+    t = str(tag).lower().replace("ё", "е").strip()
     if t in TAG_SYNONYMS:
         return TAG_SYNONYMS[t]
     t = re.sub(r"[-_/]+", " ", t)
-    t = re.sub(r"[^a-z0-9&' ]+", " ", t)
+    t = re.sub(r"[^a-z0-9а-я&' ]+", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     if t in TAG_SYNONYMS:
         return TAG_SYNONYMS[t]
@@ -64,7 +66,7 @@ def normalize_tag(tag: str) -> str:
 
 def tokenize(text: str) -> List[str]:
     """Нижний регистр, дефисы как пробелы, синонимы слов. Стоп-слова НЕ удаляются."""
-    t = str(text).lower().replace("&", " and ")
+    t = str(text).lower().replace("ё", "е").replace("&", " and ")
     t = re.sub(r"[-_/]+", " ", t)
     tokens: List[str] = []
     for tok in _TOKEN_RE.findall(t):
@@ -74,6 +76,10 @@ def tokenize(text: str) -> List[str]:
 
 def content_tokens(text: str) -> List[str]:
     return [t for t in tokenize(text) if t not in STOPWORDS and len(t) > 1]
+
+
+def is_cyrillic(token: str) -> bool:
+    return bool(_CYRILLIC_RE.search(token))
 
 
 def split_clauses(text: str) -> List[str]:

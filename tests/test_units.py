@@ -66,3 +66,33 @@ def test_config_warns_on_typo():
         out = deep_update(base, {"ranker": {"tpye": "heuristic", "weights": {"rrf_score": 1.0}}})
     assert [str(x.message) for x in w] == ["config: ключа 'ranker.tpye' нет в базовом конфиге (опечатка?)"]
     assert out["ranker"]["type"] == "stub" and out["ranker"]["weights"] == {"rrf_score": 1.0}
+
+
+def test_rule_summarizer_russian(data):
+    s = RuleSummarizer(data.catalog)
+
+    def run(q):
+        return s.summarize(Request(dialog=[Message("user", q)]))
+
+    out = run("спокойный британский инди-рок 80-х, но без женского вокала")
+    assert {"calm", "british", "indie rock", "80s"} <= set(out.include_tags)
+    assert out.exclude_tags == ["female vocalists"] and out.countries == ["GB"] and out.energy == "low"
+    # «без слов» = хочу инструментал, а не исключение
+    out = run("спокойная музыка, но без слов")
+    assert "instrumental" in out.include_tags and not out.exclude_tags
+    # отрицание не меняет энергию и не вычищает сказанное раньше
+    out = run("агрессивная музыка но не танцевальная")
+    assert out.include_tags == ["aggressive"] and out.exclude_tags == ["dance"]
+    out = run("американский рэп 2003 года, только не попса")
+    assert out.years == [2003] and "00s" in out.include_tags and out.exclude_tags == ["pop"]
+    assert "US" in out.countries
+
+
+def test_llm_summary_merge():
+    from recsys.dialog import LLMSummarizer
+    from recsys.schemas import DialogSummary
+    out = LLMSummarizer._merge(DialogSummary(include_tags=["rock"]), {
+        "include_tags": ["Hip-Hop"], "countries": ["us"], "years": [2003, "x"], "track_title": "Suga Suga",
+        "query": "american hip hop", "summary": "s"})
+    assert out.include_tags == ["hip hop"] and out.countries == ["US"] and out.years == [2003]
+    assert out.query == "american hip hop Suga Suga" and out.source == "llm+rule"
