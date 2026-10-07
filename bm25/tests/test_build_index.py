@@ -30,7 +30,7 @@ def meta(tmp_path):
 def test_load_items(meta):
     items, stats = build_index.load_items(meta, ['m4a_genres_full'])
     assert dict(zip(items['m4a_id'], items['terms'])) == {
-        'x': ['hard rock,rock'], 'y': ['pop'], 'z': ['']}
+        'x': ['hard rock', 'rock'], 'y': ['pop'], 'z': ['']}
     assert stats == {'n_rows': 5, 'n_dropped_null_ids': 1,
                      'n_dropped_duplicate_ids': 1, 'n_items': 3,
                      'n_empty_docs': 1}
@@ -61,5 +61,5 @@ def test_parquet_shards(tmp_path):
     df.iloc[2:].to_parquet(shards / 'tracks_meta-00001-of-00002.parquet')
     items, stats = build_index.load_items(shards, ['m4a_genres_full'])
     assert dict(zip(items['m4a_id'], items['terms'])) == {
-        'x': ['hard rock,rock'], 'y': ['pop'], 'z': ['']}
+        'x': ['hard rock', 'rock'], 'y': ['pop'], 'z': ['']}
     assert stats['n_dropped_duplicate_ids'] == 1

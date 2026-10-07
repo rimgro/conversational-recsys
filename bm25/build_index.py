@@ -24,7 +24,7 @@ ID_COL = 'm4a_id'
 def _terms(cell):
     if isinstance(cell, (list, tuple, np.ndarray)):
         return [str(x) for x in cell]
-    return [] if pd.isna(cell) else [str(cell)]
+    return [] if pd.isna(cell) else str(cell).split(',')
 
 
 def _read(path, keep):

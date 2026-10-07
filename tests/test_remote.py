@@ -143,7 +143,7 @@ def vps(cfg, tmp_path):
 
     from recsys.data.synthetic import make_synthetic
     meta, _ = make_synthetic(n_tracks=1500, n_users=60, seed=cfg["data"]["synthetic"]["seed"])
-    meta["m4a_tags_full"] = meta["lastfm_tag_weights"].map(lambda s: " ".join(json.loads(s)))  # без запятых: см. ниже
+    meta["m4a_tags_full"] = meta["lastfm_tag_weights"].map(lambda s: ",".join(json.loads(s)))  # как в tracks_meta
     src = tmp_path / "tracks_meta.parquet"
     meta.to_parquet(src)
     run = dict(check=True, capture_output=True)
@@ -188,9 +188,8 @@ def test_real_services(cfg, data, vps):
     assert n["hnsw_audio"] == 0 and n["bm25_tags"] > 0 and resp.tracks
 
 
-@pytest.mark.xfail(strict=True, reason='bm25/build_index.py не делит строку "a,b" по запятым: в индексе слово '
-                                       '"guitar,loud", поэтому "loud" не находится. Снять xfail после исправления.')
 def test_bm25_splits_comma_separated_tags(cfg, vps):
+    """В tracks_meta теги одной строкой через запятую: 'guitar,loud' -> слова guitar и loud."""
     urls, _ = vps
     from recsys.retrieval.remote import CandgenClient
     resp = CandgenClient(urls["bm25"]).post("/bm25/search", {"words": ["loud"], "k": 5, "index": "commas"})
