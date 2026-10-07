@@ -87,12 +87,16 @@ def infer_hnsw(model: dict, vector=None, track_ids=None, weights=None, top_k: in
         return {}
     with np.errstate(all='ignore'):  # numpy 2.0 + Accelerate (macOS) gives spurious matmul warnings
         scores = model['vectors'] @ v
-    candidates = np.arange(len(scores))
+    keep = np.ones(len(scores), dtype=bool)
     if exclude_ids:
         if isinstance(exclude_ids, str):
             exclude_ids = [exclude_ids]
-        banned = np.isin(model['item_ids'], [str(i) for i in exclude_ids])
-        candidates = candidates[~banned]
+        pos = _positions(model)  # dict lookups: np.isin on 64k string ids takes ~0.5 s
+        keep[[pos[s] for s in map(str, exclude_ids) if s in pos]] = False
+    candidates = np.flatnonzero(keep)
+    if top_k < len(candidates):  # sort only the top (ties at the cut are all kept, then sorted)
+        kth = np.partition(-scores[candidates], top_k - 1)[top_k - 1]
+        candidates = candidates[-scores[candidates] <= kth]
     order = np.lexsort((candidates, -scores[candidates]))[:top_k]
     return {model['item_ids'][i]: float(scores[i]) for i in candidates[order]}
 
