@@ -32,11 +32,9 @@ def rrf(lists: Dict[str, List[Candidate]], k: int = 60,
     return sorted(fused.values(), key=lambda f: -f.score)
 
 
-def apply_filters(fused: List[FusedCandidate], ctx: Context, catalog: Catalog,
-                  exclude_listened: bool = True) -> List[FusedCandidate]:
-    banned = set(ctx.request.shown_ids) | set(ctx.request.skipped_ids)
-    if exclude_listened:
-        banned |= ctx.profile.listened_ids
+def apply_filters(fused: List[FusedCandidate], ctx: Context, catalog: Catalog) -> List[FusedCandidate]:
+    """Убирает ctx.banned_ids, неизвестные каталогу треки, исключённые теги и артистов."""
+    banned = ctx.banned_ids
     ex_tags = ctx.summary.exclude_tags
     ex_artists = {a.lower() for a in ctx.summary.exclude_artists}
     out = []

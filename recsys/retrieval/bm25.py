@@ -1,4 +1,4 @@
-"""BM25 по тексту трека: теги (повтор по весу) + жанры + артист + название.
+"""BM25-индекс по тексту трека: теги (повтор по весу) + жанры + артист + название.
 
 Свой индекс на scipy.sparse: на 109k треков строится за секунды, без внешних зависимостей.
 В документе и запросе есть два вида токенов:
@@ -15,8 +15,6 @@ import numpy as np
 import scipy.sparse as sp
 
 from recsys.data.catalog import Catalog
-from recsys.retrieval.base import BaseRetriever
-from recsys.schemas import Candidate, Context
 from recsys.text import STOPWORDS, tokenize
 
 
@@ -28,7 +26,7 @@ def artist_token(name: str) -> str:
     return "a:" + "_".join(tokenize(name))
 
 
-def _words(text: str) -> List[str]:
+def index_words(text: str) -> List[str]:
     return [w for w in tokenize(text) if w not in STOPWORDS]
 
 
@@ -37,17 +35,17 @@ def track_document(row: dict, max_tags: int = 20) -> Counter:
     for tag, w in list(zip(row["tags"], row["tag_weights"]))[:max_tags]:
         rep = 1 + int(round(3 * min(float(w), 100.0) / 100.0))
         doc[tag_token(tag)] += rep
-        for word in _words(tag):
+        for word in index_words(tag):
             doc[word] += rep
     for g in row["genres"]:
         doc[tag_token(g)] += 2
-        for word in _words(g):
+        for word in index_words(g):
             doc[word] += 2
     if row["artist"]:
         doc[artist_token(row["artist"])] += 3
-        for word in _words(row["artist"]):
+        for word in index_words(row["artist"]):
             doc[word] += 2
-    for word in _words(row["title"]):
+    for word in index_words(row["title"]):
         doc[word] += 1
     return doc
 
@@ -107,35 +105,3 @@ def build_bm25_index(catalog: Catalog, k1: float = 1.2, b: float = 0.75) -> BM25
     docs = (track_document(dict(zip(cols, vals))) for vals in zip(*(catalog.df[c] for c in cols)))
     return BM25Index(k1, b).fit(docs)
 
-
-def summary_query(ctx: Context) -> Dict[str, float]:
-    """Запрос BM25 из саммари: теги (фраза ×2 + слова), артисты-сиды (×3), слова query."""
-    s = ctx.summary
-    q: Counter = Counter()
-    for tag in s.include_tags:
-        q[tag_token(tag)] += 2.0
-        for w in _words(tag):
-            q[w] += 1.0
-    for a in s.seed_artists:
-        q[artist_token(a)] += 3.0
-    for w in _words(s.query):
-        q[w] += 1.0
-    for w in {w for t in s.exclude_tags for w in _words(t)}:
-        q.pop(w, None)
-    return dict(q)
-
-
-class BM25Retriever(BaseRetriever):
-    """Шаг 2, источник «запрос»: BM25 по саммари диалога."""
-    name = "bm25"
-
-    def __init__(self, catalog: Catalog, index: BM25Index, top_k: int = 200, exclude_listened: bool = True):
-        super().__init__(catalog, top_k, exclude_listened)
-        self.index = index
-
-    def search(self, ctx: Context, top_k: Optional[int] = None) -> List[Candidate]:
-        q = summary_query(ctx)
-        if not q:
-            return []
-        pos, scores = self.index.search(q, top_k or self.top_k, exclude=self.excluded_positions(ctx))
-        return self.to_candidates(pos, scores)

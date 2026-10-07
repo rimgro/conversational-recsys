@@ -56,7 +56,7 @@ class Pipeline:
         t0 = time.perf_counter()
         profile = build_profile(request.history, self.catalog)
         summary = self.summarizer.summarize(request, profile)
-        ctx = Context(request=request, summary=summary, profile=profile)
+        ctx = Context.build(request, summary, profile, exclude_listened=fcfg.get("exclude_listened", True))
         t["1_summary"] = time.perf_counter() - t0
 
         # 2. кандидаты
@@ -68,7 +68,7 @@ class Pipeline:
         t0 = time.perf_counter()
         weights = source_weights(self.cfg, ctx)
         fused = rrf(candidates, k=fcfg.get("rrf_k", 60), weights=weights)
-        fused = apply_filters(fused, ctx, self.catalog, exclude_listened=fcfg.get("exclude_listened", True))
+        fused = apply_filters(fused, ctx, self.catalog)
         fused = fused[:fcfg.get("top_n", 500)]
         t["3_fusion"] = time.perf_counter() - t0
 

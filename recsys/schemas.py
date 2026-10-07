@@ -140,6 +140,15 @@ class Context:
     request: Request
     summary: DialogSummary
     profile: UserProfile
+    banned_ids: Set[str] = field(default_factory=set)  # не рекомендовать: показанное, скипнутое, прослушанное
+
+    @classmethod
+    def build(cls, request: Request, summary: DialogSummary, profile: UserProfile,
+              exclude_listened: bool = True) -> "Context":
+        banned = set(request.shown_ids) | set(request.skipped_ids)
+        if exclude_listened:
+            banned |= profile.listened_ids
+        return cls(request, summary, profile, banned)
 
 
 # ---------------------------------------------------------------- шаги 2–3: кандидаты и слияние
