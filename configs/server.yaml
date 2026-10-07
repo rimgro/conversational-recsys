@@ -1,0 +1,14 @@
+# Надстройка поверх candgen.yaml под текущий сервер: там пока только BM25 с индексами genres и tags.
+# Подключается вместе с candgen.yaml (recsys.config.CANDGEN_CONFIGS): ноутбуки с USE_CANDGEN, evaluate.py --candgen.
+# Когда на сервере появятся HNSW и индекс title — убрать этот файл из CANDGEN_CONFIGS.
+candgen:
+  bm25:
+    url: ${BM25_URL:-http://84.201.172.104:8000}
+
+retrieval:
+  bm25_title: {enabled: false}   # индекса title на сервере нет; артист + название ищет локальный title
+  hnsw_audio: {enabled: false}   # HNSW на сервере нет —
+  audio: {enabled: true}         # тот же поиск по эмбеддингам MuQ, только локально
+
+data:
+  load_embeddings: true          # эмбеддинги нужны локальному audio

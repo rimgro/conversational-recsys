@@ -6,7 +6,7 @@
 # Перед запуском:
 #   * data/crs/ — части датасета: tracks_meta-*.parquet и test_public-*.parquet (train не нужен);
 #     папка загружается в задание целиком.
-#   * секреты проекта BM25_URL, HNSW_URL (http://<IP>:8001, http://<IP>:8002) — секреты DataSphere
+#   * секреты проекта BM25_URL, BM25_API_KEY (и HNSW_URL, когда HNSW будет на сервере) — секреты DataSphere
 #     передаются заданию как переменные окружения. Без сервисов: убрать --candgen из cmd.
 # Результат (metrics.json, by_query_family.csv, ...) скачивается в eval_result/ после выполнения.
 # Быстрая проверка — --n-users 300 вместо all.
@@ -20,6 +20,7 @@ cmd: >
 inputs:
   - configs/default.yaml
   - configs/candgen.yaml
+  - configs/server.yaml
   - data/crs:
       var: DATA
 

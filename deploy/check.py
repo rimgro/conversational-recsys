@@ -2,9 +2,11 @@
 
     python deploy/check.py                                          # локально (deploy/run_local.sh)
     python deploy/check.py http://<IP>:8001 http://<IP>:8002        # VPS, с ноутбука или из DataSphere
+    python deploy/check.py http://<IP>:8000 -                       # только BM25 (HNSW ещё не развёрнут)
     !python deploy/check.py $BM25_URL $HNSW_URL                     # из ячейки ноутбука
 
-Только стандартная библиотека. Ключи, если включены: BM25_API_KEY, HNSW_API_KEY. Код выхода 1 при ошибке.
+Только стандартная библиотека. Адреса и ключи (BM25_URL, BM25_API_KEY, HNSW_URL, HNSW_API_KEY) — из окружения
+или файла .env в текущей папке. Код выхода 1 при ошибке.
 """
 import json
 import os
@@ -13,7 +15,7 @@ import time
 import urllib.error
 import urllib.request
 
-WORDS = {'genres': ['rock'], 'tags': ['rock'], 'title': ['the']}
+WORDS = {'title': ['the']}  # для остальных индексов — ['rock']
 
 
 def call(url, path, body=None, key=''):
@@ -43,10 +45,11 @@ def main(bm25_url, hnsw_url):
             ok = False
             print(f'FAIL  {name}: {e}')
 
-    found = []
+    found, indexes = [], []
 
     def bm25_health():
         h, ms = call(bm25_url, '/health')
+        indexes.extend(h['indexes'])
         return f"{ms:.0f} мс, индексы " + ', '.join(f"{n} ({i['n_items']} треков, {i['index_version']})"
                                                      for n, i in h['indexes'].items())
 
@@ -73,16 +76,29 @@ def main(bm25_url, hnsw_url):
         return f"{ms:.0f} мс, {len(r['ids'])} похожих; id из BM25 найдено в HNSW: {r['n_query_tracks']} из {len(found[:5])}"
 
     step(f'BM25 {bm25_url} /health', bm25_health)
-    for index in WORDS:
+    for index in indexes:  # те индексы, что сервис объявил в /health
         step(f'BM25 поиск, индекс {index}', bm25_search(index))
-    step(f'HNSW {hnsw_url} /hnsw/health', hnsw_health)
-    step('HNSW поиск по трекам из BM25', hnsw_search)
+    if hnsw_url == '-':
+        print('—     HNSW пропущен')
+    else:
+        step(f'HNSW {hnsw_url} /hnsw/health', hnsw_health)
+        step('HNSW поиск по трекам из BM25', hnsw_search)
     print('всё работает' if ok else 'есть ошибки')
     return 0 if ok else 1
 
 
+def load_env(path='.env'):
+    """KEY=VALUE из .env в окружение (уже заданные не перезаписываются)."""
+    if os.path.isfile(path):
+        for line in open(path, encoding='utf-8'):
+            key, sep, value = line.strip().partition('=')
+            if sep and key and not key.startswith('#'):
+                os.environ.setdefault(key.strip(), value.strip().strip('\'"'))
+
+
 if __name__ == '__main__':
+    load_env()
     args = sys.argv[1:]
-    bm25 = args[0] if args else os.environ.get('BM25_URL') or 'http://127.0.0.1:8001'
-    hnsw = args[1] if len(args) > 1 else os.environ.get('HNSW_URL') or 'http://127.0.0.1:8002'
+    bm25 = (args[0] if args else '') or os.environ.get('BM25_URL') or 'http://127.0.0.1:8001'
+    hnsw = (args[1] if len(args) > 1 else '') or os.environ.get('HNSW_URL') or 'http://127.0.0.1:8002'
     sys.exit(main(bm25, hnsw))

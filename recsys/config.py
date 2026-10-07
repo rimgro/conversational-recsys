@@ -2,10 +2,29 @@
 from __future__ import annotations
 
 import copy
+import os
 import warnings
 from typing import Any, Dict, List, Optional, Union
 
 import yaml
+
+
+# надстройки для режима с сервисами (ноутбуки с USE_CANDGEN, evaluate.py --candgen);
+# server.yaml — пока на сервере только BM25 (см. сам файл)
+CANDGEN_CONFIGS = ["configs/candgen.yaml", "configs/server.yaml"]
+
+
+def load_env(path: Optional[str] = None) -> None:
+    """Переменные из .env (KEY=VALUE, # — комментарий) в окружение; уже заданные не перезаписываются.
+    Файл — RECSYS_ENV_FILE или .env в текущей папке; RECSYS_ENV_FILE="" отключает (так в тестах)."""
+    path = os.environ.get("RECSYS_ENV_FILE", ".env") if path is None else path
+    if not path or not os.path.isfile(path):
+        return
+    with open(path, encoding="utf8") as f:
+        for line in f:
+            key, sep, value = line.strip().partition("=")
+            if sep and key and not key.startswith("#"):
+                os.environ.setdefault(key.strip(), value.strip().strip("'\""))
 
 
 def deep_update(base: Dict[str, Any], upd: Optional[Dict[str, Any]], _path: str = "") -> Dict[str, Any]:
@@ -28,7 +47,9 @@ def deep_update(base: Dict[str, Any], upd: Optional[Dict[str, Any]], _path: str 
 
 def load_config(path: Union[str, List[str]] = "configs/default.yaml",
                 overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """path — файл или список файлов: каждый следующий накладывается на предыдущий, затем overrides."""
+    """path — файл или список файлов: каждый следующий накладывается на предыдущий, затем overrides.
+    Перед этим подхватывается .env (адреса и ключи сервисов, см. load_env)."""
+    load_env()
     paths = [path] if isinstance(path, str) else list(path)
     cfg: Dict[str, Any] = {}
     for i, p in enumerate(paths):
