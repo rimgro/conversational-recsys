@@ -1,4 +1,4 @@
-from recsys.dialog.rule import RuleSummarizer
+from recsys.dialog import RuleSummarizer
 from recsys.fusion import rrf
 from recsys.llm import extract_json
 from recsys.schemas import Candidate, Message, Request

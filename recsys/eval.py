@@ -1,17 +1,46 @@
-"""Офлайн-оценка: метрики выдачи + recall каждого источника кандидатов."""
+"""Офлайн-оценка: метрики выдачи + recall каждого источника кандидатов.
+"""
+
 from __future__ import annotations
 
+import math
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
 from recsys.config import deep_update
 from recsys.data.catalog import Catalog
-from recsys.eval.metrics import hit_rate_at_k, mrr_at_k, ndcg_at_k, recall_at_k
 from recsys.llm import BaseLLM
 from recsys.pipeline import Pipeline
 from recsys.schemas import Request
+
+
+def hit_rate_at_k(rec: Sequence[str], targets: Iterable[str], k: int) -> float:
+    t = set(targets)
+    return float(any(r in t for r in rec[:k])) if t else 0.0
+
+
+def recall_at_k(rec: Sequence[str], targets: Iterable[str], k: int) -> float:
+    t = set(targets)
+    return len(t & set(rec[:k])) / len(t) if t else 0.0
+
+
+def ndcg_at_k(rec: Sequence[str], targets: Iterable[str], k: int) -> float:
+    t = set(targets)
+    if not t:
+        return 0.0
+    dcg = sum(1.0 / math.log2(i + 2) for i, r in enumerate(rec[:k]) if r in t)
+    idcg = sum(1.0 / math.log2(i + 2) for i in range(min(len(t), k)))
+    return dcg / idcg
+
+
+def mrr_at_k(rec: Sequence[str], targets: Iterable[str], k: int) -> float:
+    t = set(targets)
+    for i, r in enumerate(rec[:k]):
+        if r in t:
+            return 1.0 / (i + 1)
+    return 0.0
 
 
 def evaluate(pipeline: Pipeline, requests: List[Request], k: int = 10,
