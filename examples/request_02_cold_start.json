@@ -1,0 +1,8 @@
+{
+  "request_id": "example_02_cold_start",
+  "user_info": "",
+  "history": [],
+  "dialog": [
+    {"role": "user", "text": "Hi! I'm new here. Give me some energetic electronic music for a party."}
+  ]
+}

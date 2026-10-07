@@ -1,0 +1,18 @@
+{
+  "request_id": "example_04_multi_turn",
+  "user_id": "100055",
+  "user_info": "female, 19 years old, from Brazil. Favourite genres: pop, rnb. Dislikes metal.",
+  "history": [
+    {"track_id": "t000000", "count": 2},
+    {"track_id": "t000100", "count": 1},
+    {"track_id": "t000200", "count": 3}
+  ],
+  "dialog": [
+    {"role": "user", "text": "I want some romantic rnb for a date."},
+    {"role": "assistant", "text": "Here are a few smooth rnb tracks. How do you like them?"},
+    {"role": "user", "text": "Nice, but more happy and catchy please, without sexy stuff."}
+  ],
+  "shown_ids": ["t000300", "t000301", "t000302"],
+  "liked_ids": ["t000300"],
+  "skipped_ids": ["t000301"]
+}

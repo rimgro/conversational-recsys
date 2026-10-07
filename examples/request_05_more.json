@@ -1,0 +1,14 @@
+{
+  "request_id": "example_05_more",
+  "user_id": "100077",
+  "user_info": "24 years old",
+  "history": [
+    {"track_id": "t000003", "count": 5},
+    {"track_id": "t000004", "count": 2},
+    {"track_id": "t000005", "count": 1},
+    {"track_id": "t000006", "count": 3}
+  ],
+  "dialog": [
+    {"role": "user", "text": "more"}
+  ]
+}

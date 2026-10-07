@@ -1,0 +1,203 @@
+"""Контракты между шагами пайплайна.
+
+Request -> DialogSummary -> {source: [Candidate]} -> [FusedCandidate] -> features -> [RankedTrack] -> Response
+"""
+from __future__ import annotations
+
+import copy
+import json
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict, List, Optional, Set
+
+import pandas as pd
+
+
+# ---------------------------------------------------------------- вход
+
+@dataclass
+class Message:
+    role: str  # "user" | "assistant"
+    text: str
+
+
+@dataclass
+class HistoryItem:
+    track_id: str
+    count: float = 1.0
+    timestamp: Optional[str] = None
+
+
+@dataclass
+class Request:
+    dialog: List[Message] = field(default_factory=list)
+    history: List[HistoryItem] = field(default_factory=list)
+    user_info: str = ""
+    user_id: Optional[str] = None
+    request_id: Optional[str] = None
+    shown_ids: List[str] = field(default_factory=list)    # уже показаны в этом диалоге
+    liked_ids: List[str] = field(default_factory=list)
+    skipped_ids: List[str] = field(default_factory=list)
+    target_ids: List[str] = field(default_factory=list)   # только для офлайн-оценки
+
+    @property
+    def user_messages(self) -> List[str]:
+        return [m.text for m in self.dialog if m.role == "user"]
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Request":
+        raw_msgs = d.get("dialog", d.get("messages", [])) or []
+        dialog = [
+            m if isinstance(m, Message) else
+            Message(role=str(m.get("role", "user")), text=str(m.get("text", m.get("content", ""))))
+            for m in raw_msgs
+        ]
+        history = []
+        for h in d.get("history", []) or []:
+            if isinstance(h, HistoryItem):
+                history.append(h)
+            elif isinstance(h, dict):
+                history.append(HistoryItem(track_id=str(h["track_id"]), count=float(h.get("count", 1.0)),
+                                           timestamp=h.get("timestamp")))
+            else:
+                history.append(HistoryItem(track_id=str(h)))
+        return cls(
+            dialog=dialog,
+            history=history,
+            user_info=str(d.get("user_info", "") or ""),
+            user_id=None if d.get("user_id") is None else str(d["user_id"]),
+            request_id=d.get("request_id", d.get("dialog_id")),
+            shown_ids=[str(x) for x in d.get("shown_ids", [])],
+            liked_ids=[str(x) for x in d.get("liked_ids", [])],
+            skipped_ids=[str(x) for x in d.get("skipped_ids", [])],
+            target_ids=[str(x) for x in d.get("target_ids", d.get("target_track_ids", []))],
+        )
+
+    @classmethod
+    def from_json(cls, path: str) -> "Request":
+        with open(path, encoding="utf8") as f:
+            return cls.from_dict(json.load(f))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    def next_turn(self, response: "Response", user_text: str) -> "Request":
+        """Следующая реплика: добавляем ответ ассистента, показанные треки и новое сообщение."""
+        req = copy.deepcopy(self)
+        req.dialog.append(Message("assistant", response.text))
+        req.dialog.append(Message("user", user_text))
+        req.shown_ids = list(dict.fromkeys(req.shown_ids + response.track_ids))
+        return req
+
+
+# ---------------------------------------------------------------- шаг 1: саммари диалога
+
+@dataclass
+class DialogSummary:
+    text: str = ""                       # саммари на английском
+    query: str = ""                      # короткий поисковый запрос для BM25 / HNSW
+    include_tags: List[str] = field(default_factory=list)
+    exclude_tags: List[str] = field(default_factory=list)
+    seed_artists: List[str] = field(default_factory=list)
+    exclude_artists: List[str] = field(default_factory=list)
+    seed_track_ids: List[str] = field(default_factory=list)
+    mood: Optional[str] = None
+    energy: Optional[str] = None         # low | medium | high
+    user_tags: List[str] = field(default_factory=list)       # предпочтения из user_info
+    user_attrs: Dict[str, Any] = field(default_factory=dict)  # age, gender, country
+    source: str = "rule"                 # rule | llm | llm+rule
+
+    @property
+    def has_query(self) -> bool:
+        return bool(self.query.strip() or self.include_tags or self.seed_artists or self.seed_track_ids)
+
+
+@dataclass
+class UserProfile:
+    """Профиль вкуса, собранный из истории прослушиваний."""
+    listened_ids: Set[str] = field(default_factory=set)
+    tag_weights: Dict[str, float] = field(default_factory=dict)
+    genre_weights: Dict[str, float] = field(default_factory=dict)
+    artist_weights: Dict[str, float] = field(default_factory=dict)
+    n_known_tracks: int = 0
+
+    @staticmethod
+    def _top(d: Dict[str, float], n: int) -> List[str]:
+        return [k for k, _ in sorted(d.items(), key=lambda kv: -kv[1])[:n]]
+
+    def top_tags(self, n: int = 10) -> List[str]:
+        return self._top(self.tag_weights, n)
+
+    def top_genres(self, n: int = 5) -> List[str]:
+        return self._top(self.genre_weights, n)
+
+    def top_artists(self, n: int = 5) -> List[str]:
+        return self._top(self.artist_weights, n)
+
+
+@dataclass
+class Context:
+    """Всё, что знают шаги 2–5 о текущем запросе."""
+    request: Request
+    summary: DialogSummary
+    profile: UserProfile
+
+
+# ---------------------------------------------------------------- шаги 2–3: кандидаты и слияние
+
+@dataclass
+class Candidate:
+    track_id: str
+    source: str
+    score: float
+    rank: int  # с 1
+
+
+@dataclass
+class FusedCandidate:
+    track_id: str
+    score: float                                       # RRF
+    ranks: Dict[str, int] = field(default_factory=dict)
+    scores: Dict[str, float] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------- шаги 4–5: выдача
+
+@dataclass
+class RankedTrack:
+    track_id: str
+    rank: int
+    score: float
+    title: str = ""
+    artist: str = ""
+    tags: List[str] = field(default_factory=list)
+    reasons: List[str] = field(default_factory=list)
+    features: Dict[str, float] = field(default_factory=dict)
+
+    @property
+    def display_name(self) -> str:
+        if self.artist or self.title:
+            return f"{self.artist or '?'} — {self.title or '?'}"
+        return self.track_id
+
+
+@dataclass
+class Response:
+    text: str
+    tracks: List[RankedTrack]
+    summary: DialogSummary
+    debug: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def track_ids(self) -> List[str]:
+        return [t.track_id for t in self.tracks]
+
+    def to_frame(self) -> pd.DataFrame:
+        return pd.DataFrame([{
+            "rank": t.rank,
+            "track_id": t.track_id,
+            "artist": t.artist,
+            "title": t.title,
+            "score": round(t.score, 4),
+            "tags": ", ".join(t.tags[:6]),
+            "reasons": "; ".join(t.reasons),
+        } for t in self.tracks])

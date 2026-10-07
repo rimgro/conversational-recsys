@@ -1,0 +1,8 @@
+{
+  "request_id": "example_06_study",
+  "user_info": "student, likes lo-fi and jazz",
+  "history": [{"track_id": "t000010", "count": 2}],
+  "dialog": [
+    {"role": "user", "text": "I need instrumental music to study, chill beats or smooth jazz, nothing too loud."}
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "request_id": "example_01",
+  "user_id": "100007",
+  "user_info": "female, 24 years old, from Germany. Favourite genres: indie rock, folk.",
+  "history": [
+    {"track_id": "t000001", "count": 3},
+    {"track_id": "t000010", "count": 1},
+    {"track_id": "t000042", "count": 5}
+  ],
+  "dialog": [
+    {"role": "user", "text": "Hi! I need something calm and melancholic for working."},
+    {"role": "assistant", "text": "Sure! Any genre preferences?"},
+    {"role": "user", "text": "Maybe acoustic or folk, but no female vocalists please."}
+  ]
+}

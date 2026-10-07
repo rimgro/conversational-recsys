@@ -1,0 +1,38 @@
+# данные и артефакты (большие файлы держим в Object Storage, не в git)
+/data/
+/artifacts/
+/models/
+/outputs/
+*.parquet
+*.tsv
+*.tsv.bz2
+*.csv.bz2
+*.npy
+*.npz
+*.pkl
+*.bin
+*.safetensors
+*.ckpt
+*.pt
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# окружения и секреты
+.venv/
+venv/
+.env
+.env.*
+
+# jupyter
+.ipynb_checkpoints/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store

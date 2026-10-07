@@ -1,0 +1,82 @@
+# Пути относительные: ноутбук запускается из корня репозитория.
+
+data:
+  source: synthetic            # synthetic | onion | dataset
+  cache_dir: data/cache
+  use_cache: true
+
+  synthetic:
+    n_tracks: 5000
+    n_users: 500
+    n_dialogs: 300
+    seed: 42
+    save_dir: null             # например data/synthetic_dataset: сохранить в формате нашего датасета
+
+  onion:
+    # TODO: путь к Onion в DataSphere (S3-коннектор к бакету или локальная копия)
+    dir: data/onion
+    interactions_file: userid_trackid_count.tsv.bz2
+    user_sample_mod: 20        # пользователи с user_id % 20 == 0 (~6k из 119k); null = все
+    max_rows: null             # ограничить чтение для быстрой проверки, например 2_000_000
+    use_genres: true
+    max_tags: 20
+    metadata_file: null        # таблица track_id, title, artist (из нашего датасета)
+    n_eval_requests: 200
+
+  dataset:                     # наш датасет с диалогами (формат: recsys/data/dataset.py)
+    dir: data/our_dataset
+    tracks_file: tracks.parquet
+    dialogs_file: dialogs.jsonl
+    interactions_file: null    # если есть отдельный файл прослушиваний
+    use_onion_tags: false      # взять теги/жанры из Onion (data.onion.dir) и склеить с названиями
+    use_onion_interactions: false
+    max_history: 30
+    fields:                    # имена полей в dialogs.jsonl, если отличаются от ожидаемых
+      dialog_id: dialog_id
+      user_id: user_id
+      user_info: user_info
+      history: history
+      messages: messages
+      role: role
+      text: text
+      targets: target_track_ids
+
+llm:
+  type: stub                   # stub | local
+  model_name: Qwen/Qwen2.5-1.5B-Instruct   # для качества: Qwen/Qwen2.5-7B-Instruct
+  max_new_tokens: 512
+  temperature: 0.0
+  device_map: auto
+  torch_dtype: auto
+  load_in_4bit: false
+
+summarizer:
+  type: rule                   # rule (заглушка) | llm (фолбэк на rule)
+  min_tag_count: 2
+
+retrieval:                     # порядок = порядок вызова; enabled: false выключает источник
+  bm25:     {enabled: true, top_k: 200, k1: 1.2, b: 0.75}
+  hnsw:     {enabled: true, top_k: 200}          # ЗАГЛУШКА
+  history:  {enabled: true, top_k: 200, n_tags: 15, n_artists: 5}
+  popular:  {enabled: true, top_k: 100}
+
+fusion:
+  rrf_k: 60
+  top_n: 500                   # сколько отдаём в ранкер
+  exclude_listened: true
+  weights: {bm25: 1.0, hnsw: 0.3, history: 0.8, popular: 0.3}
+  no_query_boost: {history: 2.0, popular: 1.5}   # запрос пустой («ещё»)
+  cold_start_boost: {popular: 2.0}               # истории нет
+
+ranker:
+  type: stub                   # stub (порядок RRF) | heuristic | api
+  top_k: 10
+  api_url: null
+  weights: {}                  # для heuristic, см. recsys/ranking/heuristic.py
+
+diversity:
+  max_per_artist: 2
+
+explainer:
+  type: stub                   # stub (приветствие + список) | llm
+  n_describe: 10
