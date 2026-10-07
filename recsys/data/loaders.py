@@ -23,7 +23,7 @@ ONION_COUNTS = "userid_trackid_count.tsv.bz2"
 ONION_TIMESTAMPS = "userid_trackid_timestamp.tsv.bz2"
 
 
-def _find(directory: str, name: str) -> Optional[str]:
+def find_file(directory: str, name: str) -> Optional[str]:
     """Ищет файл как есть или без .bz2 (если уже распаковали)."""
     for cand in (name, name.replace(".bz2", "")):
         path = os.path.join(directory, cand)
@@ -115,12 +115,12 @@ def build_onion_catalog_frame(
     max_genres: int = 5,
 ) -> pd.DataFrame:
     """Склеивает теги, жанры и популярность Onion в одну таблицу (без названий)."""
-    tags_path = _find(onion_dir, ONION_TAGS)
+    tags_path = find_file(onion_dir, ONION_TAGS)
     if tags_path is None:
         raise FileNotFoundError(f"{ONION_TAGS} не найден в {onion_dir}")
     df = read_tags_dict(tags_path, max_tags=max_tags)
     if use_genres:
-        genres_path = _find(onion_dir, ONION_GENRES)
+        genres_path = find_file(onion_dir, ONION_GENRES)
         if genres_path:
             df = df.merge(read_genres_tfidf(genres_path, max_genres=max_genres), on="track_id", how="outer")
     df["popularity"] = df["track_id"].map(popularity).fillna(0.0) if popularity is not None else 0.0

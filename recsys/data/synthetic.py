@@ -1,7 +1,10 @@
-"""Синтетические данные в формате нашего датасета: каталог, прослушивания, диалоги.
+"""Синтетические данные, чтобы пайплайн запускался без реальных диалогов.
 
-Нужны, чтобы весь пайплайн запускался до появления реальных данных. Качество на них
-ничего не говорит о реальном качестве: запросы строятся из тех же тегов, по которым ищем.
+make_synthetic                     каталог + прослушивания + диалоги в формате нашего датасета
+make_requests_from_interactions    запросы из реальных прослушиваний Onion: часть истории -> цели,
+                                   реплика по шаблону из тегов цели
+
+Метрики на таких запросах завышены: запросы строятся из тех же тегов, по которым ищем.
 """
 from __future__ import annotations
 
@@ -9,6 +12,11 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
+
+from recsys.data.catalog import Catalog
+from recsys.data.history import InteractionStore
+from recsys.schemas import Message, Request
+from recsys.text import GENERIC_WORDS
 
 GENRES: Dict[str, List[str]] = {
     "indie rock": ["indie", "alternative", "guitar", "melancholic", "british"],
@@ -168,3 +176,53 @@ def _make_dialog(rng, d: int, user: dict, tracks: pd.DataFrame, by_genre, artist
         "messages": msgs,
         "target_track_ids": targets,
     }
+
+
+# ---------------------------------------------------------------- запросы из прослушиваний Onion
+
+# Теги Last.fm, которые не описывают музыку.
+JUNK_TAGS = {"seen live", "favorites", "favourite", "favorite", "albums i own", "under 2000 listeners",
+             "spotify", "my favorite", "awesome", "beautiful", "love", "loved", "good", "best"}
+
+_TEMPLATES = [
+    "I'm looking for something {a} and {b}.",
+    "Can you recommend some {a} music? Preferably {b}.",
+    "Play me some {a} tracks, something {b}.",
+    "I want {a}, maybe a bit {b}.",
+]
+
+
+def make_requests_from_interactions(
+    catalog: Catalog,
+    interactions: InteractionStore,
+    n_requests: int = 200,
+    n_history: int = 20,
+    n_targets: int = 5,
+    seed: int = 42,
+) -> List[Request]:
+    rng = np.random.default_rng(seed)
+    users = [u for u in interactions.users if interactions.n_tracks(u) >= n_history + n_targets]
+    rng.shuffle(users)
+    requests: List[Request] = []
+    for uid in users:
+        if len(requests) >= n_requests:
+            break
+        items = [h for h in interactions.history(uid, max_len=None) if h.track_id in catalog]
+        items = list({h.track_id: h for h in items}.values())
+        if len(items) < n_history + n_targets:
+            continue
+        order = rng.permutation(len(items))
+        targets = [items[i] for i in order[:n_targets]]
+        history = [items[i] for i in order[n_targets:n_targets + n_history]]
+        tags = [t for t in catalog.tags(targets[0].track_id) if t not in JUNK_TAGS and t not in GENERIC_WORDS]
+        if len(tags) < 2:
+            continue
+        text = str(rng.choice(_TEMPLATES)).format(a=tags[0], b=tags[1])
+        requests.append(Request(
+            dialog=[Message("user", text)],
+            history=history,
+            user_id=uid,
+            request_id=f"onion_{uid}",
+            target_ids=[t.track_id for t in targets],
+        ))
+    return requests

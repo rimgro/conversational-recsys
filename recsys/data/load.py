@@ -12,10 +12,9 @@ import pandas as pd
 from recsys.data.catalog import Catalog
 from recsys.data.dataset import load_dialogs, record_to_request
 from recsys.data.history import InteractionStore
-from recsys.data.loaders import (ONION_COUNTS, _find, build_onion_catalog_frame, merge_metadata,
+from recsys.data.loaders import (ONION_COUNTS, find_file, build_onion_catalog_frame, merge_metadata,
                                  popularity_from_interactions, read_interactions, read_table)
-from recsys.data.synthetic import make_synthetic
-from recsys.data.synthetic_queries import make_requests_from_interactions
+from recsys.data.synthetic import make_requests_from_interactions, make_synthetic
 from recsys.schemas import Request
 
 
@@ -71,7 +70,7 @@ def _load_synthetic(dcfg: Dict[str, Any]) -> DataBundle:
 # ---------------------------------------------------------------- onion
 
 def _onion_interactions(ocfg: Dict[str, Any]) -> Optional[InteractionStore]:
-    path = _find(ocfg["dir"], ocfg.get("interactions_file", ONION_COUNTS))
+    path = find_file(ocfg["dir"], ocfg.get("interactions_file", ONION_COUNTS))
     if path is None:
         print(f"[data] файл взаимодействий не найден в {ocfg['dir']}, история только из запросов")
         return None
