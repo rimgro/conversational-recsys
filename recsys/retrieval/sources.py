@@ -1,16 +1,20 @@
 """Шаг 2: источники кандидатов. Каждый: search(ctx) -> [Candidate], по убыванию score.
 
-bm25     запрос из саммари диалога -> BM25
-history  профиль тегов и артистов из истории -> тот же BM25 (позже: collab-HNSW по ALS / item2vec)
-popular  популярное в жанрах пользователя; холодный старт
-hnsw     ЗАГЛУШКА: детерминированная выборка с перекосом в популярное
-         (позже: hnswlib по эмбеддингам или HTTP к Retrieval API, с тем же интерфейсом)
+bm25      запрос из саммари -> BM25 по тегам/жанрам/артисту/году/стране/языку
+relisten  треки из истории самого пользователя, по совпадению с запросом и весу в истории
+          (в датасете 93% целей — повторные прослушивания)
+title     артист + название по символьным триграммам, с транслитом кириллицы (запросы exact)
+lyrics    строчка текста песни (нужен data.crs.with_lyrics: true)
+history   профиль тегов и артистов из истории -> BM25 (новые треки во вкусе пользователя)
+audio     эмбеддинги MuQ: ближайшие к «центру вкуса» истории
+popular   популярное в жанрах пользователя; холодный старт
+hnsw      ЗАГЛУШКА текстового семантического поиска: выборка с перекосом в популярное
 
-Треки из ctx.banned_ids (прослушанное, показанное, скипнутое) источники не возвращают,
-чтобы не тратить на них top_k.
+Треки из ctx.banned_ids источники не возвращают, чтобы не тратить на них top_k.
 """
 from __future__ import annotations
 
+import warnings
 from abc import ABC, abstractmethod
 from collections import Counter
 from typing import Any, Dict, List, Optional
@@ -18,9 +22,12 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from recsys.data.catalog import Catalog
-from recsys.retrieval.bm25 import BM25Index, artist_token, build_bm25_index, index_words, tag_token
+from recsys.retrieval.bm25 import (BM25Index, artist_token, build_bm25_index, build_lyrics_index,
+                                   build_title_index, char_trigrams, country_token, index_words, lang_token,
+                                   tag_token, year_token)
+from recsys.ru import STOPWORDS_RU, translit
 from recsys.schemas import Candidate, Context
-from recsys.text import stable_hash
+from recsys.text import is_cyrillic, stable_hash, tokenize
 
 
 class BaseRetriever(ABC):
@@ -74,9 +81,129 @@ class BM25Retriever(_BM25Source):
             q[artist_token(a)] += 3.0
         for w in index_words(s.query):
             q[w] += 1.0
-        for w in {w for t in s.exclude_tags for w in index_words(t)}:
+        for c in s.countries:
+            q[country_token(c)] += 2.0
+        for lang in s.languages:
+            q[lang_token(lang)] += 2.0
+        for y in s.years:
+            q[year_token(y)] += 2.0
+        # слова исключённых тегов убираем, если они не входят в желаемые ('рок, но не хард-рок')
+        wanted = {w for t in s.include_tags for w in index_words(t)}
+        for w in {w for t in s.exclude_tags for w in index_words(t)} - wanted:
             q.pop(w, None)
         return dict(q)
+
+
+class RelistenRetriever(BaseRetriever):
+    """Свои треки пользователя: score = совпадение с запросом (0..1) + history_weight * вес в истории (0..1)."""
+    name = "relisten"
+
+    def __init__(self, catalog: Catalog, index: BM25Index, top_k: int = 100, history_weight: float = 0.3,
+                 recency_decay: float = 0.995):
+        super().__init__(catalog, top_k)
+        self.query_source = BM25Retriever(catalog, index)
+        self.index = index
+        self.history_weight = history_weight
+        self.recency_decay = recency_decay
+
+    def search(self, ctx: Context, top_k: Optional[int] = None) -> List[Candidate]:
+        items = [(self.catalog.pos(h.track_id), h) for h in ctx.request.history]  # свежие первыми
+        items = [(p, h) for p, h in items if p is not None and h.track_id not in ctx.banned_ids]
+        if not items:
+            return []
+        pos = np.array([p for p, _ in items])
+        hist = np.array([np.log1p(h.count) * self.recency_decay ** i for i, (_, h) in enumerate(items)])
+        score = self.history_weight * hist / hist.max()
+        q = self.query_source.build_query(ctx)
+        if q:
+            match = self.index.scores(q)[pos]
+            if match.max() > 0:
+                score = score + match / match.max()
+        k = min(top_k or self.top_k, len(pos))
+        order = np.argsort(-score, kind="stable")[:k]
+        return self.to_candidates(pos[order], score[order])
+
+
+class TitleRetriever(BaseRetriever):
+    """Артист + название по триграммам. Отдаёт только треки, покрывающие >= min_coverage триграмм запроса."""
+    name = "title"
+
+    def __init__(self, catalog: Catalog, top_k: int = 50, min_coverage: float = 0.4):
+        super().__init__(catalog, top_k)
+        self.index = build_title_index(catalog)
+        self.min_coverage = min_coverage
+
+    @staticmethod
+    def query_text(ctx: Context) -> str:
+        """Латиница как есть, кириллица транслитом; служебные русские слова выкидываем."""
+        last = ctx.request.user_messages[-1] if ctx.request.user_messages else ""
+        words = [translit(w) if is_cyrillic(w) else w for w in tokenize(last) if w not in STOPWORDS_RU]
+        return " ".join(words + ctx.summary.seed_artists)
+
+    def search(self, ctx: Context, top_k: Optional[int] = None) -> List[Candidate]:
+        grams = char_trigrams(self.query_text(ctx))
+        if len(grams) < 3:
+            return []
+        q = dict(Counter(grams))
+        pos, scores = self.index.search(q, top_k or self.top_k, exclude=self.catalog.positions(ctx.banned_ids))
+        qset = set(grams)
+        keep = [i for i, p in enumerate(pos)
+                if len(qset & set(char_trigrams(f"{self.catalog.df.at[p, 'artist']} {self.catalog.df.at[p, 'title']}")))
+                >= self.min_coverage * len(qset)]
+        return self.to_candidates(pos[keep], scores[keep])
+
+
+class LyricsRetriever(_BM25Source):
+    """Строчка текста: латинские слова последней реплики -> BM25 по текстам. Нужно >= 2 слов."""
+    name = "lyrics"
+
+    def build_query(self, ctx: Context) -> Dict[str, float]:
+        last = ctx.request.user_messages[-1] if ctx.request.user_messages else ""
+        words = [w for w in index_words(last) if not is_cyrillic(w)]
+        return dict(Counter(words)) if len(words) >= 2 else {}
+
+
+class AudioRetriever(BaseRetriever):
+    """Косинус MuQ-эмбеддингов к взвешенному центру истории (+ лайки и треки артистов-сидов)."""
+    name = "audio"
+
+    def __init__(self, catalog: Catalog, top_k: int = 200):
+        super().__init__(catalog, top_k)
+        if catalog.embeddings is None:
+            raise ValueError("audio: в каталоге нет эмбеддингов")
+
+    def query_vector(self, ctx: Context) -> Optional[np.ndarray]:
+        weights: Dict[int, float] = {}
+        for tid, w in ctx.profile.track_weights.items():
+            weights[self.catalog.pos(tid)] = w
+        top = max(weights.values(), default=1.0)
+        for tid in ctx.request.liked_ids:
+            p = self.catalog.pos(tid)
+            if p is not None:
+                weights[p] = weights.get(p, 0.0) + top
+        seeds = {a.lower() for a in ctx.summary.seed_artists}
+        if seeds:
+            for p in np.flatnonzero(self.catalog.df["artist"].str.lower().isin(seeds).to_numpy()):
+                weights[int(p)] = weights.get(int(p), 0.0) + top
+        weights.pop(None, None)
+        if not weights:
+            return None
+        pos = np.fromiter(weights.keys(), dtype=np.int64)
+        v = (self.catalog.embeddings[pos] * np.fromiter(weights.values(), dtype=np.float32)[:, None]).sum(0)
+        n = np.linalg.norm(v)
+        return v / n if n > 0 else None
+
+    def search(self, ctx: Context, top_k: Optional[int] = None) -> List[Candidate]:
+        v = self.query_vector(ctx)
+        if v is None:
+            return []
+        with np.errstate(all="ignore"):  # numpy 2.0 + Accelerate (macOS) даёт ложные warnings в matmul
+            scores = self.catalog.embeddings @ v
+        scores[self.catalog.positions(ctx.banned_ids)] = -np.inf
+        k = min(top_k or self.top_k, int(np.isfinite(scores).sum()))
+        top = np.argpartition(-scores, k - 1)[:k] if k else np.array([], dtype=np.int64)
+        top = top[np.argsort(-scores[top], kind="stable")]
+        return self.to_candidates(top, scores[top])
 
 
 class HistoryRetriever(_BM25Source):
@@ -151,7 +278,7 @@ def build_retrievers(cfg: Dict[str, Any], catalog: Catalog,
     """Источники из cfg['retrieval'] с enabled: true, в порядке конфига."""
     rcfg = cfg.get("retrieval", {})
     enabled = {name: c for name, c in rcfg.items() if c.get("enabled", False)}
-    if bm25_index is None and ({"bm25", "history"} & set(enabled)):
+    if bm25_index is None and ({"bm25", "history", "relisten"} & set(enabled)):
         b = rcfg.get("bm25", {})
         bm25_index = build_bm25_index(catalog, k1=b.get("k1", 1.2), b=b.get("b", 0.75))
     out: List[BaseRetriever] = []
@@ -166,6 +293,22 @@ def build_retrievers(cfg: Dict[str, Any], catalog: Catalog,
             out.append(PopularRetriever(catalog, top_k=k))
         elif name == "hnsw":
             out.append(HNSWStubRetriever(catalog, top_k=k))
+        elif name == "relisten":
+            out.append(RelistenRetriever(catalog, bm25_index, top_k=k,
+                                         history_weight=c.get("history_weight", 0.3)))
+        elif name == "title":
+            out.append(TitleRetriever(catalog, top_k=k, min_coverage=c.get("min_coverage", 0.4)))
+        elif name == "lyrics":
+            lyrics_index = build_lyrics_index(catalog)
+            if lyrics_index is None:
+                warnings.warn("retrieval.lyrics: в каталоге нет текстов (data.crs.with_lyrics: false), источник выключен")
+                continue
+            out.append(LyricsRetriever(catalog, lyrics_index, top_k=k))
+        elif name == "audio":
+            if catalog.embeddings is None:
+                warnings.warn("retrieval.audio: в каталоге нет эмбеддингов, источник выключен")
+                continue
+            out.append(AudioRetriever(catalog, top_k=k))
         else:
             raise ValueError(f"Неизвестный источник кандидатов: {name}")
     return out

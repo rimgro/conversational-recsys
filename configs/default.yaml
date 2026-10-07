@@ -35,19 +35,23 @@ summarizer:
   type: rule                   # rule (заглушка) | llm (фолбэк на rule)
   min_tag_count: 2
 
-retrieval:                     # порядок = порядок вызова; enabled: false выключает источник
+retrieval:                     # enabled: false выключает источник; описание: recsys/retrieval/sources.py
   bm25:     {enabled: true, top_k: 200, k1: 1.2, b: 0.75}
-  hnsw:     {enabled: true, top_k: 200}          # ЗАГЛУШКА
+  relisten: {enabled: true, top_k: 100, history_weight: 0.3}   # свои треки: 93% целей отсюда
+  title:    {enabled: true, top_k: 50, min_coverage: 0.4}      # артист + название, транслит
+  lyrics:   {enabled: false, top_k: 50}                        # нужен data.crs.with_lyrics: true
   history:  {enabled: true, top_k: 200, n_tags: 15, n_artists: 5}
+  audio:    {enabled: true, top_k: 200}                        # эмбеддинги MuQ
   popular:  {enabled: true, top_k: 100}
+  hnsw:     {enabled: false, top_k: 200}                       # ЗАГЛУШКА текстового семантического поиска
 
 fusion:
   rrf_k: 60
   top_n: 500                   # сколько отдаём в ранкер
-  exclude_listened: false     # 93% целей в датасете — повторные прослушивания, их нельзя выкидывать
-  weights: {bm25: 1.0, hnsw: 0.3, history: 0.8, popular: 0.3}
-  no_query_boost: {history: 2.0, popular: 1.5}   # запрос пустой («ещё»)
-  cold_start_boost: {popular: 2.0}               # истории нет
+  exclude_listened: false      # 93% целей в датасете — повторные прослушивания, их нельзя выкидывать
+  weights: {bm25: 1.0, relisten: 1.0, title: 1.5, lyrics: 1.5, history: 0.5, audio: 0.5, popular: 0.2, hnsw: 0.1}
+  no_query_boost: {relisten: 1.5, history: 2.0, audio: 1.5, popular: 1.5}   # запрос пустой («ещё»)
+  cold_start_boost: {popular: 2.0}                                         # истории нет
 
 ranker:
   type: stub                   # stub (порядок RRF) | heuristic | api

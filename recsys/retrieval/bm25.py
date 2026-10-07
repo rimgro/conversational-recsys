@@ -1,10 +1,12 @@
-"""BM25-индекс по тексту трека: теги (повтор по весу) + жанры + артист + название.
+"""BM25-индексы на scipy.sparse (64k треков строятся за секунды, без внешних зависимостей).
 
-Свой индекс на scipy.sparse: на 109k треков строится за секунды, без внешних зависимостей.
-В документе и запросе есть два вида токенов:
-  слова       'indie', 'rock'       — мягкое совпадение
-  фразы       't:indie_rock'        — точное совпадение тега
-              'a:the_velvet_owls'   — точное совпадение артиста
+build_bm25_index    документ трека: теги (повтор по весу), жанры, артист, название, альбом,
+                    десятилетие, страна, язык, инструментал. Виды токенов:
+                      слова           'indie', 'rock'        мягкое совпадение
+                      't:indie_rock'  тег целиком            'a:the_velvet_owls'  артист целиком
+                      'c:us' страна артиста, 'l:en' язык текста, 'y:1983' год релиза
+build_title_index   символьные триграммы «артист + название» (опечатки, транслит)
+build_lyrics_index  слова текста песни (поиск по строчке)
 """
 from __future__ import annotations
 
@@ -12,9 +14,11 @@ from collections import Counter
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
+import pandas as pd
 import scipy.sparse as sp
 
 from recsys.data.catalog import Catalog
+from recsys.ru import decade_tag
 from recsys.text import STOPWORDS, tokenize
 
 
@@ -26,8 +30,33 @@ def artist_token(name: str) -> str:
     return "a:" + "_".join(tokenize(name))
 
 
+def country_token(code: str) -> str:
+    return "c:" + str(code).lower()
+
+
+def lang_token(code: str) -> str:
+    return "l:" + str(code).lower()
+
+
+def year_token(year: int) -> str:
+    return f"y:{int(year)}"
+
+
 def index_words(text: str) -> List[str]:
     return [w for w in tokenize(text) if w not in STOPWORDS]
+
+
+def char_trigrams(text: str) -> List[str]:
+    """'kate bush' -> ['_ka', 'kat', 'ate', 'te_', '_bu', ...]: устойчиво к опечаткам и транслиту."""
+    out: List[str] = []
+    for w in tokenize(text):
+        w = f"_{w}_"
+        out.extend(w[i:i + 3] for i in range(len(w) - 2))
+    return out
+
+
+def _present(x) -> bool:
+    return x is not None and not (np.isscalar(x) and pd.isna(x)) and str(x) != ""
 
 
 def track_document(row: dict, max_tags: int = 20) -> Counter:
@@ -45,8 +74,19 @@ def track_document(row: dict, max_tags: int = 20) -> Counter:
         doc[artist_token(row["artist"])] += 3
         for word in index_words(row["artist"]):
             doc[word] += 2
-    for word in index_words(row["title"]):
+    for word in index_words(row["title"]) + index_words(row.get("album") or ""):
         doc[word] += 1
+    year = row.get("release_year")
+    if _present(year) and int(year) > 1900:
+        doc[tag_token(decade_tag(int(year)))] += 2
+        doc[year_token(int(year))] += 2
+    if _present(row.get("artist_country")):
+        doc[country_token(row["artist_country"])] += 2
+    if _present(row.get("lang")):
+        doc[lang_token(row["lang"])] += 2
+    if _present(row.get("is_instrumental")) and bool(row["is_instrumental"]):
+        doc[tag_token("instrumental")] += 3
+        doc["instrumental"] += 3
     return doc
 
 
@@ -101,7 +141,21 @@ class BM25Index:
 
 
 def build_bm25_index(catalog: Catalog, k1: float = 1.2, b: float = 0.75) -> BM25Index:
-    cols = ["tags", "tag_weights", "genres", "artist", "title"]
+    optional = ["album", "release_year", "artist_country", "lang", "is_instrumental"]
+    cols = ["tags", "tag_weights", "genres", "artist", "title"] + [c for c in optional if c in catalog.df]
     docs = (track_document(dict(zip(cols, vals))) for vals in zip(*(catalog.df[c] for c in cols)))
     return BM25Index(k1, b).fit(docs)
+
+
+def build_title_index(catalog: Catalog) -> BM25Index:
+    docs = (Counter(char_trigrams(f"{a} {t}")) for a, t in zip(catalog.df["artist"], catalog.df["title"]))
+    return BM25Index(k1=1.2, b=0.3).fit(docs)
+
+
+def build_lyrics_index(catalog: Catalog) -> Optional[BM25Index]:
+    """None, если в каталоге нет текстов (data.crs.with_lyrics: false)."""
+    if "lyrics" not in catalog.df:
+        return None
+    docs = (Counter(index_words(x)) if isinstance(x, str) else Counter() for x in catalog.df["lyrics"])
+    return BM25Index().fit(docs)
 

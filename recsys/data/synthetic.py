@@ -58,6 +58,10 @@ _NOUN = ["Owls", "Rivers", "Machines", "Hearts", "Wolves", "Lights", "Engines", 
 _WORDS = ["rain", "fire", "morning", "shadows", "dreams", "city", "ocean", "glass", "summer", "home", "stars",
           "road", "smoke", "gold", "silence", "storm", "paper", "echo", "blue", "heart", "night", "river",
           "window", "train", "mountain", "letter", "mirror", "garden", "winter", "light"]
+# словарь текстов песен: ~2000 псевдослов, чтобы строчка из нескольких слов была почти уникальной
+_LYRIC_WORDS = [a + b + c for a in ["ba", "lo", "mi", "ne", "ru", "sa", "te", "vo", "ki", "da", "fe", "go"]
+                for b in ["ra", "li", "mo", "nu", "se", "ta", "vi", "ko", "de", "pa", "zu", "lo", "re", "ni"]
+                for c in ["", "n", "s", "l", "r", "t", "m", "k", "x", "y", "d", "p"]]
 _LAT2CYR = [("sh", "ш"), ("ch", "ч"), ("th", "т"), ("oo", "у"), ("ee", "и"), ("a", "а"), ("b", "б"), ("c", "к"),
             ("d", "д"), ("e", "е"), ("f", "ф"), ("g", "г"), ("h", "х"), ("i", "и"), ("j", "дж"), ("k", "к"),
             ("l", "л"), ("m", "м"), ("n", "н"), ("o", "о"), ("p", "п"), ("q", "к"), ("r", "р"), ("s", "с"),
@@ -134,7 +138,7 @@ def _make_tracks(rng, n_tracks: int, n_artists: int) -> pd.DataFrame:
         energetic = any(t in tags for t in ("energetic", "aggressive", "fast", "party", "dance"))
         calm = any(t in tags for t in ("calm", "chill", "relaxing"))
         title = " ".join(w.capitalize() for w in rng.choice(_WORDS, size=int(rng.integers(1, 4)), replace=False))
-        lyrics = "" if instrumental else " ".join(rng.choice(_WORDS, size=60))
+        lyrics = "" if instrumental else " ".join(rng.choice(_LYRIC_WORDS, size=60))
         rows.append({
             "m4a_id": f"T{i:015d}",
             "spotify_id": f"S{i:021d}",
