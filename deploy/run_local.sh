@@ -7,8 +7,10 @@ set -e
 SRC=${1:?путь к tracks_meta.parquet}
 IDX=${2:-indexes}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-BM25_PY=$(command -v "${BM25_PYTHON:-python}")
-HNSW_PY=$(command -v "${HNSW_PYTHON:-python}")
+# абсолютный путь: дальше сервисы запускаются из bm25/ и hnsw/
+abspath() { case $1 in /*) echo "$1" ;; */*) echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")" ;; *) command -v "$1" ;; esac; }
+BM25_PY=$(abspath "${BM25_PYTHON:-python}")
+HNSW_PY=$(abspath "${HNSW_PYTHON:-python}")
 for PY in "$BM25_PY" "$HNSW_PY"; do
   "$PY" -c 'import sys, fastapi, uvicorn; sys.exit(sys.version_info < (3, 10))' 2>/dev/null || {
     echo "$PY: нужен Python 3.10+ с fastapi и uvicorn, например:" >&2
@@ -27,5 +29,5 @@ BM25_PID=$!
 (cd "$ROOT/hnsw" && HNSW_INDEXES_DIR="$IDX/hnsw" exec "$HNSW_PY" -m uvicorn service:app --host 127.0.0.1 --port 8002) &
 HNSW_PID=$!
 trap 'kill $BM25_PID $HNSW_PID 2>/dev/null' INT TERM EXIT
-echo "BM25 http://127.0.0.1:8001  HNSW http://127.0.0.1:8002  проверка: python deploy/check.py"
+echo "запускаю BM25 на http://127.0.0.1:8001 и HNSW на http://127.0.0.1:8002; проверка: python deploy/check.py"
 wait
