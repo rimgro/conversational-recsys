@@ -163,6 +163,21 @@ class LyricsRetriever(_BM25Source):
         return dict(Counter(words)) if len(words) >= 2 else {}
 
 
+def taste_track_weights(ctx: Context, catalog: Catalog) -> Dict[str, float]:
+    """Треки «центра вкуса» с весами: история (вес из профиля) + лайки и треки артистов-сидов
+    (с весом самого тяжёлого трека истории). Общий запрос для audio и hnsw_api."""
+    weights = {t: w for t, w in ctx.profile.track_weights.items() if t in catalog}
+    top = max(weights.values(), default=1.0)
+    extra = [t for t in ctx.request.liked_ids if t in catalog]
+    seeds = {a.lower() for a in ctx.summary.seed_artists}
+    if seeds:
+        mask = catalog.df["artist"].str.lower().isin(seeds).to_numpy()
+        extra += [str(t) for t in catalog.track_ids[mask]]
+    for t in extra:
+        weights[t] = weights.get(t, 0.0) + top
+    return weights
+
+
 class AudioRetriever(BaseRetriever):
     """Косинус MuQ-эмбеддингов к взвешенному центру истории (+ лайки и треки артистов-сидов)."""
     name = "audio"
@@ -173,19 +188,7 @@ class AudioRetriever(BaseRetriever):
             raise ValueError("audio: в каталоге нет эмбеддингов")
 
     def query_vector(self, ctx: Context) -> Optional[np.ndarray]:
-        weights: Dict[int, float] = {}
-        for tid, w in ctx.profile.track_weights.items():
-            weights[self.catalog.pos(tid)] = w
-        top = max(weights.values(), default=1.0)
-        for tid in ctx.request.liked_ids:
-            p = self.catalog.pos(tid)
-            if p is not None:
-                weights[p] = weights.get(p, 0.0) + top
-        seeds = {a.lower() for a in ctx.summary.seed_artists}
-        if seeds:
-            for p in np.flatnonzero(self.catalog.df["artist"].str.lower().isin(seeds).to_numpy()):
-                weights[int(p)] = weights.get(int(p), 0.0) + top
-        weights.pop(None, None)
+        weights = {self.catalog.pos(t): w for t, w in taste_track_weights(ctx, self.catalog).items()}
         if not weights:
             return None
         pos = np.fromiter(weights.keys(), dtype=np.int64)
@@ -275,40 +278,54 @@ class HNSWStubRetriever(BaseRetriever):
 
 def build_retrievers(cfg: Dict[str, Any], catalog: Catalog,
                      bm25_index: Optional[BM25Index] = None) -> List[BaseRetriever]:
-    """Источники из cfg['retrieval'] с enabled: true, в порядке конфига."""
+    """Источники из cfg['retrieval'] с enabled: true, в порядке конфига.
+
+    Тип источника — поле type (по умолчанию = имя), так можно завести несколько источников
+    одного типа: bm25_genres, bm25_tags (type: bm25_api) и т.д. Удалённые типы: recsys/retrieval/remote.py.
+    """
+    from recsys.retrieval.remote import BM25APIRetriever, CandgenClient, HNSWAPIRetriever
+
     rcfg = cfg.get("retrieval", {})
     enabled = {name: c for name, c in rcfg.items() if c.get("enabled", False)}
-    if bm25_index is None and ({"bm25", "history", "relisten"} & set(enabled)):
+    kinds = {name: c.get("type", name) for name, c in enabled.items()}
+    if bm25_index is None and ({"bm25", "history", "relisten"} & set(kinds.values())):
         b = rcfg.get("bm25", {})
         bm25_index = build_bm25_index(catalog, k1=b.get("k1", 1.2), b=b.get("b", 0.75))
     out: List[BaseRetriever] = []
     for name, c in enabled.items():
         k = c.get("top_k", 200)
-        if name == "bm25":
+        kind = kinds[name]
+        if kind == "bm25_api":
+            out.append(BM25APIRetriever(name, catalog, CandgenClient.from_config(cfg, c), index=c.get("index", "genres"),
+                                        top_k=k, query=c.get("query", "tags")))
+        elif kind == "hnsw_api":
+            out.append(HNSWAPIRetriever(name, catalog, CandgenClient.from_config(cfg, c), index=c.get("index", "audio"),
+                                        top_k=k))
+        elif kind == "bm25":
             out.append(BM25Retriever(catalog, bm25_index, top_k=k))
-        elif name == "history":
+        elif kind == "history":
             out.append(HistoryRetriever(catalog, bm25_index, top_k=k,
                                         n_tags=c.get("n_tags", 15), n_artists=c.get("n_artists", 5)))
-        elif name == "popular":
+        elif kind == "popular":
             out.append(PopularRetriever(catalog, top_k=k))
-        elif name == "hnsw":
+        elif kind == "hnsw":
             out.append(HNSWStubRetriever(catalog, top_k=k))
-        elif name == "relisten":
+        elif kind == "relisten":
             out.append(RelistenRetriever(catalog, bm25_index, top_k=k,
                                          history_weight=c.get("history_weight", 0.3)))
-        elif name == "title":
+        elif kind == "title":
             out.append(TitleRetriever(catalog, top_k=k, min_coverage=c.get("min_coverage", 0.4)))
-        elif name == "lyrics":
+        elif kind == "lyrics":
             lyrics_index = build_lyrics_index(catalog)
             if lyrics_index is None:
                 warnings.warn("retrieval.lyrics: в каталоге нет текстов (data.crs.with_lyrics: false), источник выключен")
                 continue
             out.append(LyricsRetriever(catalog, lyrics_index, top_k=k))
-        elif name == "audio":
+        elif kind == "audio":
             if catalog.embeddings is None:
                 warnings.warn("retrieval.audio: в каталоге нет эмбеддингов, источник выключен")
                 continue
             out.append(AudioRetriever(catalog, top_k=k))
         else:
-            raise ValueError(f"Неизвестный источник кандидатов: {name}")
+            raise ValueError(f"Неизвестный тип источника кандидатов: {name} (type={kind})")
     return out

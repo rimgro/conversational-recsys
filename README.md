@@ -10,13 +10,30 @@
 
 ```bash
 pip install -r requirements.txt
-pytest -q                 # тесты, пайплайн целиком на синтетике
+pytest -q                 # тесты, пайплайн целиком на синтетике (с FastAPI ещё и против настоящего candgen)
 jupyter lab main.ipynb    # или открыть в DataSphere
 ```
+
+С кандгенами: собрать индексы и поднять образ 1 (`candgen/RUN.md`), в ноутбуке поставить `USE_CANDGEN = True`.
 
 Без данных всё работает на синтетике в формате датасета (`data.source: synthetic`). Для настоящих данных
 положить `tracks_meta.parquet`, `train.parquet`, `test_public.parquet` в `data/` и поставить `data.source: crs`.
 В DataSphere: открыть `main.ipynb` из корня репозитория; для LLM нужна GPU-конфигурация и `transformers`.
+
+## Два образа
+
+```
+образ 1: candgen/  (bm25/ + hnsw/)          образ 2: recsys/ + main.ipynb  (Dockerfile в корне)
+  POST /bm25/search  genres | tags | title    разбор запроса -> локальные источники (relisten, title,
+  POST /hnsw/search  audio (MuQ)       <---     history, popular) + HTTP к образу 1 -> RRF -> ранкер -> ответ
+  индексы строятся отдельно из tracks_meta
+```
+
+- **Образ 1** — кандгены, обучаются и обновляются отдельно, наружу только predict по HTTP. Сборка и API: [candgen/RUN.md](candgen/RUN.md).
+- **Образ 2** — наша часть. Удалённые источники `bm25_genres`, `bm25_tags`, `bm25_title`, `hnsw_audio` (`recsys/retrieval/remote.py`)
+  включаются надстройкой `configs/candgen.yaml`, адрес образа 1 — `CANDGEN_URL`. Без неё работают локальные `bm25` и `audio`,
+  так что ноутбук запускается и без сервисов.
+- Если образ 1 недоступен, удалённые источники возвращают пустой список с предупреждением, остальные работают.
 
 ## Что важно в данных
 
@@ -48,6 +65,8 @@ jupyter lab main.ipynb    # или открыть в DataSphere
 | `audio` | эмбеддинги MuQ, ближайшие к центру вкуса | discovery, audio_attributes |
 | `popular` | популярное в жанрах пользователя | холодный старт |
 | `hnsw` | **заглушка** текстового семантического поиска (выключена) | — |
+| `bm25_genres`, `bm25_tags`, `bm25_title` | BM25 из образа 1 (`type: bm25_api`) | как `bm25` / `title` |
+| `hnsw_audio` | эмбеддинги из образа 1 (`type: hnsw_api`) | как `audio` |
 
 Контракты между шагами: `recsys/schemas.py` (`Request`, `DialogSummary`, `Candidate`, `FusedCandidate`, `RankedTrack`, `Response`).
 
@@ -55,7 +74,12 @@ jupyter lab main.ipynb    # или открыть в DataSphere
 
 ```
 main.ipynb                 главный ноутбук
+Dockerfile                 образ 2 (наша часть)
 configs/default.yaml       все параметры и переключатели
+configs/candgen.yaml       надстройка: BM25 и HNSW из образа 1 по HTTP
+bm25/                      кандген BM25: индекс, сборка, FastAPI (свой Dockerfile для отдельного запуска)
+hnsw/                      кандген HNSW: индекс эмбеддингов, сборка, FastAPI-роутер
+candgen/                   образ 1: bm25 + hnsw в одном сервисе (main.py, Dockerfile, compose, build_indexes.sh)
 docs/dataset.md            описание датасета
 examples/*.json            примеры запросов (id треков из синтетики)
 recsys/
@@ -68,7 +92,8 @@ recsys/
   dialog.py       шаг 1: RuleSummarizer (заглушка), LLMSummarizer, промпты
   retrieval/
     bm25.py       BM25-индексы: теги, триграммы названий, тексты песен
-    sources.py    шаг 2: источники кандидатов
+    sources.py    шаг 2: локальные источники кандидатов
+    remote.py     шаг 2: источники из образа 1 по HTTP (bm25_api, hnsw_api)
   fusion.py       шаг 3: RRF, фильтры, веса источников
   ranking.py      шаг 4: признаки, StubRanker, HeuristicRanker, APIRanker
   explain.py      шаг 5: StubExplainer, LLMExplainer (ответ по-русски)

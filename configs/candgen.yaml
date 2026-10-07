@@ -1,0 +1,13 @@
+# Надстройка над default.yaml: BM25 и HNSW берутся из образа 1 по HTTP вместо локальных.
+#   cfg = load_config(["configs/default.yaml", "configs/candgen.yaml"])
+# Локально остаются источники, которым нужна история пользователя целиком (relisten, title, history, popular).
+candgen:
+  url: ${CANDGEN_URL:-http://localhost:8000}   # адрес образа 1 (в DataSphere — адрес ноды)
+
+retrieval:
+  bm25: {enabled: false}
+  audio: {enabled: false}
+  bm25_genres: {enabled: true}
+  bm25_tags: {enabled: true}
+  bm25_title: {enabled: true}
+  hnsw_audio: {enabled: true}
