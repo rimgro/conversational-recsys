@@ -4,7 +4,7 @@ from recsys.data import build_profile
 from recsys.dialog import RuleSummarizer
 from recsys.retrieval import (AudioRetriever, BM25Retriever, LyricsRetriever, RelistenRetriever, TitleRetriever,
                               build_bm25_index)
-from recsys.retrieval.bm25 import build_lyrics_index
+from recsys.retrieval.local_index import build_lyrics_index
 from recsys.schemas import Context, HistoryItem, Message, Request
 
 

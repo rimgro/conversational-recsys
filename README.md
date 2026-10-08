@@ -128,7 +128,7 @@ recsys/
   llm.py          StubLLM, LocalLLM (transformers), extract_json
   dialog.py       шаг 1: RuleSummarizer (заглушка), LLMSummarizer, промпты
   retrieval/
-    bm25.py       BM25-индексы: теги, триграммы названий, тексты песен
+    local_index.py  локальные индексы (BM25 по тегам, триграммы названий, тексты песен) — не сервис BM25
     sources.py    шаг 2: локальные источники кандидатов
     remote.py     шаг 2: источники с сервера по HTTP (bm25_api, hnsw_api)
   fusion.py       шаг 3: RRF, фильтры, веса источников

@@ -23,7 +23,7 @@ from collections import Counter
 from typing import Any, Dict, List, Optional
 
 from recsys.data.catalog import Catalog
-from recsys.retrieval.bm25 import index_words
+from recsys.retrieval.local_index import index_words
 from recsys.retrieval.sources import BaseRetriever, TitleRetriever
 from recsys.schemas import Candidate, Context
 

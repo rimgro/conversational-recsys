@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from recsys.data.catalog import Catalog
-from recsys.retrieval.bm25 import (BM25Index, artist_token, build_bm25_index, build_lyrics_index,
+from recsys.retrieval.local_index import (BM25Index, artist_token, build_bm25_index, build_lyrics_index,
                                    build_title_index, char_trigrams, country_token, index_words, lang_token,
                                    tag_token, year_token)
 from recsys.schemas import Candidate, Context
