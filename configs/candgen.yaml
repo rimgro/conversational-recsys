@@ -1,19 +1,10 @@
-# Надстройка над default.yaml: BM25 и HNSW берутся с VPS по HTTP вместо локальных.
+# Надстройка над default.yaml: BM25 берётся с сервера по HTTP вместо локального.
 #   cfg = load_config(["configs/default.yaml", "configs/candgen.yaml"])
-# Локально остаются источники, которым нужна история пользователя целиком (relisten, title, history, popular).
-candgen:
-  bm25:
-    url: ${BM25_URL:-http://localhost:8001}    # http://<IP VPS>:8001
-  hnsw:
-    url: ${HNSW_URL:-http://localhost:8002}    # http://<IP VPS>:8002
-
-data:
-  load_embeddings: false       # аудио-поиск на VPS: эмбеддинги в DataSphere не грузим
-
+# Адрес и ключ — BM25_URL, BM25_API_KEY (файл .env или секреты проекта DataSphere).
+# Локально остаются источники, которым нужна история пользователя целиком (relisten, title, history, popular),
+# и поиск по аудио-эмбеддингам MuQ (audio).
 retrieval:
   bm25: {enabled: false}
-  audio: {enabled: false}
   bm25_genres: {enabled: true}
   bm25_tags: {enabled: true}
-  bm25_title: {enabled: true}
-  hnsw_audio: {enabled: true}
+  bm25_title: {enabled: false}   # индекса title на сервере пока нет; артист + название ищет локальный title

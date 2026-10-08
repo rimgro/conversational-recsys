@@ -8,7 +8,6 @@ data:
   seed: 42
   cache_dir: data/cache        # кэш каталога crs (parquet + эмбеддинги .npy)
   use_cache: true
-  load_embeddings: true        # эмбеддинги MuQ в память (нужны локальному audio); с VPS не нужны
 
   synthetic:
     n_tracks: 5000
@@ -36,16 +35,13 @@ summarizer:
   type: rule                   # rule (заглушка) | llm (фолбэк на rule)
   min_tag_count: 2
 
-candgen:                       # кандгены BM25 и HNSW на VPS (deploy/README.md, API: docs/candgen_api.md); включается configs/candgen.yaml
+candgen:                       # сервисы-кандгены по HTTP (API: docs/candgen_api.md); включается configs/candgen.yaml
   timeout: 5.0                 # секунды на запрос; при ошибке источник пропускается
   retries: 1                   # повтор при обрыве соединения (таймаут не повторяется)
   headers: {}                  # доп. заголовки ко всем запросам; ${VAR} берётся из окружения
   bm25:
-    url: http://localhost:8001
+    url: ${BM25_URL}           # адрес сервера BM25 (.env или секрет DataSphere)
     api_key: ${BM25_API_KEY}   # заголовок X-API-Key; пусто = без ключа
-  hnsw:
-    url: http://localhost:8002
-    api_key: ${HNSW_API_KEY}
 
 retrieval:                     # enabled: false выключает источник; type по умолчанию = имя (recsys/retrieval/sources.py)
   bm25:     {enabled: true, top_k: 200, k1: 1.2, b: 0.75}
@@ -55,19 +51,18 @@ retrieval:                     # enabled: false выключает источн�
   history:  {enabled: true, top_k: 200, n_tags: 15, n_artists: 5}
   audio:    {enabled: true, top_k: 200}                        # эмбеддинги MuQ
   popular:  {enabled: true, top_k: 100}
-  # кандгены на VPS (recsys/retrieval/remote.py), адреса в candgen.bm25 / candgen.hnsw
+  # BM25 с сервера (recsys/retrieval/remote.py), адрес в candgen.bm25
   bm25_genres: {enabled: false, type: bm25_api, index: genres, query: tags, top_k: 200}
   bm25_tags:   {enabled: false, type: bm25_api, index: tags, query: tags, top_k: 200}
   bm25_title:  {enabled: false, type: bm25_api, index: title, query: title, top_k: 50}
-  hnsw_audio:  {enabled: false, type: hnsw_api, index: audio, top_k: 200}
 
 fusion:
   rrf_k: 60
   top_n: 500                   # сколько отдаём в ранкер
   exclude_listened: false      # 93% целей в датасете — повторные прослушивания, их нельзя выкидывать
   weights: {bm25: 1.0, relisten: 1.0, title: 1.5, lyrics: 1.5, history: 0.5, audio: 0.5, popular: 0.2,
-            bm25_genres: 0.7, bm25_tags: 0.7, bm25_title: 1.0, hnsw_audio: 0.5}
-  no_query_boost: {relisten: 1.5, history: 2.0, audio: 1.5, popular: 1.5, hnsw_audio: 1.5}   # запрос пустой («ещё»)
+            bm25_genres: 0.7, bm25_tags: 0.7, bm25_title: 1.0}
+  no_query_boost: {relisten: 1.5, history: 2.0, audio: 1.5, popular: 1.5}   # запрос пустой («ещё»)
   cold_start_boost: {popular: 2.0}                                         # истории нет
 
 ranker:

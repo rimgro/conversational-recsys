@@ -10,40 +10,38 @@
 |---|---|
 | `inference.ipynb` | запрос пользователя → ответ и треки; следующая реплика |
 | `main.ipynb` | эксперименты: разбор шагов, метрики по типам запросов, сравнение вариантов, LLM |
-| `examples/candgen.ipynb` | проверка сервисов BM25 и HNSW руками: какие запросы и что они отвечают |
+| `examples/candgen.ipynb` | проверка сервиса BM25 руками: какие запросы и что он отвечает |
 
 ## Запуск
 
 ```bash
 pip install -r requirements.txt
-pytest -q                 # тесты, пайплайн целиком на синтетике (с FastAPI ещё и против настоящих bm25/ и hnsw/)
+pytest -q                 # тесты, пайплайн целиком на синтетике
 jupyter lab inference.ipynb   # или открыть в DataSphere
 ```
 
-С кандгенами на VPS: поднять их по [deploy/README.md](deploy/README.md), задать `BM25_URL` и `HNSW_URL`,
-в ноутбуке поставить `USE_CANDGEN = True`.
+С BM25 на сервере: задать `BM25_URL` и `BM25_API_KEY` (файл `.env` в корне — он не в git — или секреты
+DataSphere) и поставить в ноутбуке `USE_CANDGEN = True`.
 
 Без данных всё работает на синтетике в формате датасета (`data.source: synthetic`). Настоящие данные:
 `tracks_meta`, `train`, `test_public` — целиком (`train.parquet`) или частями (`train-00000-of-00078.parquet`, так
 выложен полный датасет) в одной папке, например `data/full/`; в ноутбуке `DATA = "crs"`, `DATA_DIR = "data/full"`.
 В DataSphere: открыть ноутбук из корня репозитория; для LLM нужна GPU-конфигурация и `transformers`.
 
-## Кандгены на VPS
+## Сервисы-кандгены
 
-```
-VPS                                                DataSphere: recsys/ + ноутбуки
-  :8001  bm25/  POST /bm25/search  genres|tags|title   разбор запроса -> локальные источники (relisten, title,
-  :8002  hnsw/  POST /hnsw/search  audio (MuQ)  <---     history, popular) + HTTP к VPS -> RRF -> ранкер -> ответ
-  индексы строятся на VPS из tracks_meta
-```
+Сервисы разрабатываются и разворачиваются в своих ветках, здесь только клиент к ним (`recsys/retrieval/remote.py`)
+и контракт [docs/candgen_api.md](docs/candgen_api.md):
 
-- **BM25 и HNSW** — два независимых сервиса (свой процесс, venv, порт, индексы): обучаются и обновляются отдельно,
-  наружу только predict по HTTP. Запуск: [deploy/README.md](deploy/README.md).
-- **Контракт** между ними и нашей частью: [docs/candgen_api.md](docs/candgen_api.md). Каждую из трёх частей можно менять
-  независимо, пока он соблюдается.
-- **Наша часть**: источники `bm25_genres`, `bm25_tags`, `bm25_title`, `hnsw_audio` (`recsys/retrieval/remote.py`) включаются
-  надстройкой `configs/candgen.yaml`, адреса — `BM25_URL`, `HNSW_URL`. Тогда эмбеддинги в память DataSphere не грузятся.
-  Без надстройки работают локальные `bm25` и `audio`, так что ноутбук запускается и без VPS.
+| Ветка | Что | Сейчас |
+|---|---|---|
+| `dev/bm25` | сервис BM25 (`POST /bm25/search`, индексы genres, tags, title) | развёрнут на сервере |
+| `fix/bm25-comma-split` | исправление сборки индексов BM25 (жанры через запятую) | ждёт слияния в `dev/bm25` |
+| `dev/hnsw` | текстовый семантический поиск (EmbeddingGemma + LanceDB) | не развёрнут |
+| `dev-ranker` | ранкер LightGBM | в разработке |
+
+- `configs/candgen.yaml` включает источники `bm25_genres`, `bm25_tags` с сервера вместо локального `bm25`.
+  Без неё всё считается локально, так что ноутбуки работают и без сервера.
 - Если сервис недоступен, его источники возвращают пустой список с предупреждением, остальные работают.
 
 ## Валидация (`evaluate.py`)
@@ -54,7 +52,7 @@ VPS                                                DataSphere: recsys/ + ноу�
 
 ```bash
 python evaluate.py --data-dir "CRS dataset" --n-users 1000              # быстро, ~3 мин
-python evaluate.py --data-dir "CRS dataset" --n-users all --candgen     # весь сплит, BM25 и HNSW с VPS
+python evaluate.py --data-dir "CRS dataset" --n-users all --candgen     # весь сплит, BM25 с сервера
 python evaluate.py --data-dir "CRS dataset" --set ranker.type=heuristic # любой параметр конфига
 ```
 
@@ -95,8 +93,7 @@ python evaluate.py --data-dir "CRS dataset" --set ranker.type=heuristic # люб
 | `history` | новые треки по профилю тегов и артистов | discovery (`is_new`) |
 | `audio` | эмбеддинги MuQ, ближайшие к центру вкуса | discovery, audio_attributes |
 | `popular` | популярное в жанрах пользователя | холодный старт |
-| `bm25_genres`, `bm25_tags`, `bm25_title` | BM25 с VPS (`type: bm25_api`) | как `bm25` / `title` |
-| `hnsw_audio` | эмбеддинги с VPS (`type: hnsw_api`) | как `audio` |
+| `bm25_genres`, `bm25_tags`, `bm25_title` | BM25 с сервера (`type: bm25_api`); `bm25_title` ждёт индекса title | как `bm25` / `title` |
 
 Контракты между шагами: `recsys/schemas.py` (`Request`, `DialogSummary`, `Candidate`, `FusedCandidate`, `RankedTrack`, `Response`).
 
@@ -108,13 +105,10 @@ evaluate.py                валидация: метрики на test_public -
 jobs/evaluate.yaml         то же в DataSphere Jobs
 main.ipynb                 эксперименты и метрики
 configs/default.yaml       все параметры и переключатели
-configs/candgen.yaml       надстройка: BM25 и HNSW с VPS по HTTP
-bm25/                      кандген BM25: индекс, сборка, FastAPI
-hnsw/                      кандген HNSW: индекс эмбеддингов, сборка, FastAPI
-deploy/                    VPS: systemd-юниты, build_indexes.sh, run_local.sh (то же локально), check.py, инструкция
+configs/candgen.yaml       надстройка: BM25 с сервера по HTTP
 docs/dataset.md            описание датасета
-docs/candgen_api.md        API кандгенов (контракт с нашей частью)
-examples/candgen.ipynb     проверка BM25 и HNSW руками
+docs/candgen_api.md        API сервисов-кандгенов (контракт с нашей частью)
+examples/candgen.ipynb     проверка BM25 руками
 recsys/
   schemas.py      контракты между шагами
   config.py       загрузка YAML + overrides (предупреждает об опечатках в ключах)
@@ -126,7 +120,7 @@ recsys/
   retrieval/
     bm25.py       BM25-индексы: теги, триграммы названий, тексты песен
     sources.py    шаг 2: локальные источники кандидатов
-    remote.py     шаг 2: источники с VPS по HTTP (bm25_api, hnsw_api)
+    remote.py     шаг 2: источники с сервера по HTTP (bm25_api)
   fusion.py       шаг 3: RRF, фильтры, веса источников
   ranking.py      шаг 4: признаки, StubRanker, HeuristicRanker, APIRanker
   explain.py      шаг 5: StubExplainer, LLMExplainer (ответ по-русски)

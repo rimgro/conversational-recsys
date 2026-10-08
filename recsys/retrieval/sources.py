@@ -164,7 +164,7 @@ class LyricsRetriever(_BM25Source):
 
 def taste_track_weights(ctx: Context, catalog: Catalog) -> Dict[str, float]:
     """Треки «центра вкуса» с весами: история (вес из профиля) + лайки и треки артистов-сидов
-    (с весом самого тяжёлого трека истории). Общий запрос для audio и hnsw_api."""
+    (с весом самого тяжёлого трека истории): запрос для audio."""
     weights = {t: w for t, w in ctx.profile.track_weights.items() if t in catalog}
     top = max(weights.values(), default=1.0)
     extra = [t for t in ctx.request.liked_ids if t in catalog]
@@ -261,7 +261,7 @@ def build_retrievers(cfg: Dict[str, Any], catalog: Catalog,
     Тип источника — поле type (по умолчанию = имя), так можно завести несколько источников
     одного типа: bm25_genres, bm25_tags (type: bm25_api) и т.д. Удалённые типы: recsys/retrieval/remote.py.
     """
-    from recsys.retrieval.remote import BM25APIRetriever, CandgenClient, HNSWAPIRetriever
+    from recsys.retrieval.remote import BM25APIRetriever, CandgenClient
 
     rcfg = cfg.get("retrieval", {})
     enabled = {name: c for name, c in rcfg.items() if c.get("enabled", False)}
@@ -276,9 +276,6 @@ def build_retrievers(cfg: Dict[str, Any], catalog: Catalog,
         if kind == "bm25_api":
             out.append(BM25APIRetriever(name, catalog, CandgenClient.from_config(cfg, "bm25", c), index=c.get("index", "genres"),
                                         top_k=k, query=c.get("query", "tags")))
-        elif kind == "hnsw_api":
-            out.append(HNSWAPIRetriever(name, catalog, CandgenClient.from_config(cfg, "hnsw", c), index=c.get("index", "audio"),
-                                        top_k=k))
         elif kind == "bm25":
             out.append(BM25Retriever(catalog, bm25_index, top_k=k))
         elif kind == "history":

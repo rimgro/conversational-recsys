@@ -1,14 +1,13 @@
-"""Кандидаты из кандгенов на VPS (bm25/ и hnsw/, два отдельных сервиса) по HTTP.
+"""Кандидаты из сервисов-кандгенов по HTTP (сейчас BM25: код в ветке dev/bm25, развёрнут на сервере).
 
 Кандгены обучаются и живут отдельно; здесь только predict-вызовы по контракту docs/candgen_api.md.
 Тот же интерфейс, что у локальных источников: search(ctx) -> [Candidate]. Ошибка сети / сервиса ->
 пустой список, предупреждение и last_error (пайплайн не падает, остальные источники работают).
 
   bm25_api   POST /bm25/search  слова из саммари -> индекс genres / tags / title     (candgen.bm25)
-  hnsw_api   POST /hnsw/search  треки истории с весами (+ лайки, артисты-сиды) -> audio   (candgen.hnsw)
 
-Конфиг: раздел candgen (timeout, retries, headers; bm25 / hnsw: url, api_key) + источники с
-type: bm25_api | hnsw_api. Значения вида ${VAR} и ${VAR:-по умолчанию} берутся из переменных окружения.
+Конфиг: раздел candgen (timeout, retries, headers; bm25: url, api_key) + источники с type: bm25_api.
+Значения вида ${VAR} и ${VAR:-по умолчанию} берутся из переменных окружения (и файла .env).
 """
 from __future__ import annotations
 
@@ -24,7 +23,7 @@ from typing import Any, Dict, List, Optional
 
 from recsys.data.catalog import Catalog
 from recsys.retrieval.bm25 import index_words
-from recsys.retrieval.sources import BaseRetriever, TitleRetriever, taste_track_weights
+from recsys.retrieval.sources import BaseRetriever, TitleRetriever
 from recsys.schemas import Candidate, Context
 
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
@@ -96,12 +95,12 @@ class CandgenClient:
     @classmethod
     def from_config(cls, cfg: Dict[str, Any], service: str,
                     source_cfg: Optional[Dict[str, Any]] = None) -> "CandgenClient":
-        """Общие настройки candgen + candgen.<service> (bm25 | hnsw) + ключи из самого источника."""
+        """Общие настройки candgen + candgen.<service> (например, bm25) + ключи из самого источника."""
         common = cfg.get("candgen", {})
         c = {**{k: v for k, v in common.items() if k in _CLIENT_KEYS}, **common.get(service, {}),
              **{k: v for k, v in (source_cfg or {}).items() if k in _CLIENT_KEYS}}
-        if not c.get("url"):
-            raise ValueError(f"candgen.{service}.url не задан")
+        if not expand_env(c.get("url") or ""):
+            raise ValueError(f"candgen.{service}.url не задан (для bm25 — переменная BM25_URL или файл .env)")
         return cls(c["url"], timeout=c.get("timeout", 5.0), api_key=c.get("api_key"),
                    headers=c.get("headers"), retries=c.get("retries", 1))
 
@@ -182,17 +181,3 @@ class BM25APIRetriever(_RemoteRetriever):
     def payload(self, ctx: Context, k: int) -> Optional[Dict[str, Any]]:
         words = self.words(ctx)
         return {"words": words, "k": k} if words else None
-
-
-class HNSWAPIRetriever(_RemoteRetriever):
-    service = "hnsw"
-    path = "/hnsw/search"
-    health_path = "/hnsw/health"
-    MAX_TRACKS = 10_000
-
-    def payload(self, ctx: Context, k: int) -> Optional[Dict[str, Any]]:
-        weights = taste_track_weights(ctx, self.catalog)
-        if not weights:
-            return None
-        top = sorted(weights.items(), key=lambda kv: -kv[1])[:self.MAX_TRACKS]
-        return {"track_ids": [t for t, _ in top], "weights": [float(w) for _, w in top], "k": k}

@@ -13,9 +13,9 @@
   per_request.csv       метрики каждого запроса; дописывается по ходу, при обрыве прогона не пропадает
   config.yaml           полный конфиг прогона
 
-С --candgen перед стартом проверяется /health сервисов: если какой-то недоступен, прогон не начинается,
-чтобы метрики не посчитались молча без его кандидатов. Адреса и ключи — BM25_URL, BM25_API_KEY,
-HNSW_URL (из окружения или файла .env).
+С --candgen (BM25 с сервера) перед стартом проверяется /health: если сервис недоступен, прогон не начинается,
+чтобы метрики не посчитались молча без его кандидатов. Адрес и ключ — BM25_URL, BM25_API_KEY
+(из окружения или файла .env).
 Полный прогон в облаке без открытого ноутбука: jobs/evaluate.yaml (DataSphere Jobs).
 """
 import argparse
@@ -29,7 +29,7 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from recsys.config import CANDGEN_CONFIGS, load_config
+from recsys.config import load_config
 from recsys.data import load_data
 from recsys.eval import evaluate, metrics_by
 from recsys.pipeline import Pipeline
@@ -65,8 +65,7 @@ def git_commit() -> str:
 
 
 def build_config(a: argparse.Namespace):
-    candgen = [config_path(Path(f).name) for f in CANDGEN_CONFIGS] if a.candgen else []
-    files = [config_path("default.yaml")] + candgen + a.config
+    files = [config_path("default.yaml")] + ([config_path("candgen.yaml")] if a.candgen else []) + a.config
     over: dict = {"data": {"eval_split": a.split}}
     if a.synthetic:
         over["data"]["source"] = "synthetic"
@@ -94,7 +93,7 @@ def main(argv=None) -> int:
     p.add_argument("--synthetic", action="store_true", help="синтетика вместо датасета")
     p.add_argument("--n-users", help="сколько пользователей взять из сплита; all — все (по умолчанию из конфига)")
     p.add_argument("--max-positives", help="запросов на пользователя; all — все (по умолчанию из конфига)")
-    p.add_argument("--candgen", action="store_true", help="BM25 и HNSW по HTTP (recsys.config.CANDGEN_CONFIGS)")
+    p.add_argument("--candgen", action="store_true", help="BM25 с сервера по HTTP (configs/candgen.yaml)")
     p.add_argument("--config", action="append", default=[], help="ещё YAML поверх (можно несколько)")
     p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                    help="параметр конфига, например ranker.type=heuristic (можно несколько)")
@@ -119,7 +118,7 @@ def main(argv=None) -> int:
     for name, h in health.items():
         print(f"[candgen] {name}: {h}")
     if down:
-        print(f"сервисы недоступны: {sorted(down)}; проверьте BM25_URL / HNSW_URL (deploy/check.py)", file=sys.stderr)
+        print(f"сервисы недоступны: {sorted(down)}; проверьте BM25_URL и BM25_API_KEY", file=sys.stderr)
         return 2
 
     run_dir = Path(a.run_dir or Path(a.out) / f"{started:%Y%m%d_%H%M%S}_{a.split}")

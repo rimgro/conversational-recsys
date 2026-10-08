@@ -9,11 +9,6 @@ from typing import Any, Dict, List, Optional, Union
 import yaml
 
 
-# надстройки для режима с сервисами (ноутбуки с USE_CANDGEN, evaluate.py --candgen);
-# server.yaml — пока на сервере только BM25 (см. сам файл)
-CANDGEN_CONFIGS = ["configs/candgen.yaml", "configs/server.yaml"]
-
-
 def load_env(path: Optional[str] = None) -> None:
     """Переменные из .env (KEY=VALUE, # — комментарий) в окружение; уже заданные не перезаписываются.
     Файл — RECSYS_ENV_FILE или .env в текущей папке; RECSYS_ENV_FILE="" отключает (так в тестах)."""

@@ -50,12 +50,9 @@ def _read_table(path: Union[str, List[str]], columns: Optional[List[str]] = None
     return pa.concat_tables([pq.read_table(f, columns=columns) for f in files])
 
 
-def read_tracks_meta(path: Union[str, List[str]], with_lyrics: bool = False,
-                     with_embeddings: bool = True) -> pd.DataFrame:
+def read_tracks_meta(path: Union[str, List[str]], with_lyrics: bool = False) -> pd.DataFrame:
     """Читает только нужные колонки (в файле их ~100, включая длинные тексты). path — файл или список частей."""
     wanted = _RAW_COLUMNS + EXTRA_COLUMNS + (["lyrics"] if with_lyrics else [])
-    if not with_embeddings:
-        wanted.remove("muq_embedding")
     first = path if isinstance(path, str) else path[0]
     present = set(pq.read_schema(first).names)
     return _read_table(path, columns=[c for c in wanted if c in present]).to_pandas()

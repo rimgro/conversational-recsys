@@ -37,8 +37,6 @@ def load_data(cfg: Dict[str, Any], verbose: bool = True) -> DataBundle:
         s = dcfg.get("synthetic", {})
         meta, split_dfs = make_synthetic(n_tracks=s.get("n_tracks", 5000), n_users=s.get("n_users", 300),
                                          seed=s.get("seed", 42))
-        if not dcfg.get("load_embeddings", True):
-            meta = meta.drop(columns=["muq_embedding"], errors="ignore")
         catalog = catalog_from_meta(meta, max_tags=dcfg.get("max_tags", 20))
     elif dcfg["source"] == "crs":
         c = dcfg["crs"]
@@ -61,18 +59,17 @@ def load_data(cfg: Dict[str, Any], verbose: bool = True) -> DataBundle:
 def _crs_catalog(c: Dict[str, Any], dcfg: Dict[str, Any]) -> Catalog:
     """tracks_meta -> Catalog, с кэшем (parquet + эмбеддинги .npy) в data.cache_dir."""
     with_lyrics = c.get("with_lyrics", False)
-    with_emb = dcfg.get("load_embeddings", True)
     src = parquet_files(c["dir"], "tracks_meta")
     stats = [os.stat(f) for f in src]
     # ключ кэша зависит от исходных файлов: новый tracks_meta не подхватит старый кэш
     key = (f"{sum(st.st_size for st in stats)}_{int(max(st.st_mtime for st in stats))}_{len(src)}"
            f"_{dcfg.get('max_tags', 20)}"
-           f"{'_lyrics' if with_lyrics else ''}{'' if with_emb else '_noemb'}")
+           f"{'_lyrics' if with_lyrics else ''}")
     cache_dir = dcfg.get("cache_dir")
     cache = os.path.join(cache_dir, f"catalog_crs_{key}.parquet") if cache_dir else None
     if cache and dcfg.get("use_cache", True) and os.path.exists(cache):
         return Catalog.load(cache)
-    meta = read_tracks_meta(src, with_lyrics=with_lyrics, with_embeddings=with_emb)
+    meta = read_tracks_meta(src, with_lyrics=with_lyrics)
     catalog = catalog_from_meta(meta, max_tags=dcfg.get("max_tags", 20))
     if cache:
         os.makedirs(cache_dir, exist_ok=True)
