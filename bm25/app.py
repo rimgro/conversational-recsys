@@ -1,31 +1,25 @@
-"""HTTP API for the BM25 candidate generator.
+"""HTTP API for the single Music4All bm25s card model.
 
-    BM25_INDEXES_DIR=indexes BM25_API_KEY=... uvicorn app:app --port 8000
-
-Env: BM25_INDEXES_DIR (required; every subdirectory with a meta.json is an
-index named after the subdirectory, e.g. indexes/genres, indexes/tags; the
-'genres' index must exist and is the default), BM25_API_KEY (empty disables
-auth). Indexes are loaded once at startup, read-only.
-
-POST /bm25/search  {"words": [...], "k": 20, "exclude_ids": [...], "index": "tags"}
-                -> {"ids": [...], "scores": [...], "index": "tags", "index_version": "..."}
-GET  /health
+BM25_INDEXES_DIR points to a directory containing cards/.
+Legacy request names genres and tags are aliases for cards.
+Indexes load once at startup; restart after updating the model.
 """
 import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from bm25 import infer_bm25, load_bm25
+from cards_model import infer_cards, load_cards
 
 log = logging.getLogger('bm25')
 
-DEFAULT_INDEX = 'genres'
+DEFAULT_INDEX = 'cards'
+INDEX_ALIASES = {'cards', 'genres', 'tags'}
 MAX_K = 1000
 MAX_WORDS = 256
 MAX_EXCLUDE = 100_000
@@ -36,7 +30,7 @@ class SearchRequest(BaseModel):
     words: list[str] = Field(max_length=MAX_WORDS)
     k: int = Field(ge=1, le=MAX_K)
     exclude_ids: list[str] = Field(default_factory=list, max_length=MAX_EXCLUDE)
-    index: str | None = None
+    index: Optional[str] = None
 
 
 class SearchResponse(BaseModel):
@@ -47,12 +41,7 @@ class SearchResponse(BaseModel):
 
 
 def load_indexes(root) -> dict:
-    root = Path(root)
-    models = {p.name: load_bm25(p) for p in sorted(root.iterdir())
-              if (p / 'meta.json').is_file()}
-    if not models:
-        raise RuntimeError(f'No indexes found in {root}')
-    return models
+    return {DEFAULT_INDEX: load_cards(Path(root) / DEFAULT_INDEX)}
 
 
 @asynccontextmanager
@@ -76,7 +65,7 @@ app = FastAPI(title='BM25 candidate generator', lifespan=lifespan)
 
 
 def check_api_key(request: Request,
-                  x_api_key: Annotated[str | None, Header()] = None) -> None:
+                  x_api_key: Annotated[Optional[str], Header()] = None) -> None:
     expected = request.app.state.api_key
     if expected and not secrets.compare_digest((x_api_key or '').encode(),
                                                expected.encode()):
@@ -87,11 +76,11 @@ def check_api_key(request: Request,
           dependencies=[Depends(check_api_key)])
 def search(body: SearchRequest, request: Request) -> SearchResponse:
     name = body.index or DEFAULT_INDEX
-    model = request.app.state.models.get(name)
+    model = request.app.state.models.get(DEFAULT_INDEX) if name in INDEX_ALIASES else None
     if model is None:
         raise HTTPException(status_code=404, detail=(
             f'Unknown index {name!r}; available: {sorted(request.app.state.models)}'))
-    result = infer_bm25(model, body.words, top_k=body.k,
+    result = infer_cards(model, body.words, top_k=body.k,
                         exclude_ids=body.exclude_ids)
     return SearchResponse(ids=list(result), scores=list(result.values()),
                           index=name, index_version=model['index_version'])

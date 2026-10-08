@@ -1,56 +1,73 @@
-# BM25 service
+# Music4All card BM25 service
 
-HTTP API for lexical candidate search over `tracks_meta`. Python 3.10+.
+This service loads one already trained `bm25s==0.3.13` model. It does not
+retrain the notebook index. `genres` and `tags` are request aliases for
+`cards`: all three search the complete card and return the same results.
+An omitted or null `index` selects `cards`. Responses preserve an explicitly
+requested alias in `index`; `index_version` identifies the actual card model.
+`/health` reports only the single physical model, `cards`.
 
-## Setup
+## Prepare artifacts locally
 
 ```bash
 pip install -r requirements.txt
+python package_cards.py --source /path/to/bm25_index --output /path/to/bm25-indexes-cards.zip
 ```
 
-## Build indexes
+The archive contains `indexes/cards/`. It includes the original index arrays,
+vocabulary, parameters, tokenization settings and `items.parquet`, plus a
+manifest with SHA256 checksums and a deterministic `index_version`.
 
-Point `--input` at `tracks_meta.jsonl`, `tracks_meta.parquet` or a folder of `tracks_meta-*.parquet` shards:
+## Deploy
+
+Stop the existing service using its existing service manager. Back up its code
+and the whole existing indexes directory before replacing anything. Install the
+updated `app.py`, `cards_model.py` and `requirements.txt` in the server's `bm25`
+directory and run `pip install -r requirements.txt` in its service environment.
+Extract the archive into a staging directory and verify the files against the
+SHA256 values in `indexes/cards/meta.json`. Replace the existing indexes directory
+with the staged `indexes/` directory (keep the backup for rollback).
+
+Keep the existing `BM25_API_KEY` environment setting. Keep:
 
 ```bash
-python build_index.py --input ../data/tracks_meta.jsonl --field m4a_genres_full --out indexes/genres
-python build_index.py --input ../data/tracks_meta.jsonl --field m4a_tags_full --out indexes/tags
+export BM25_INDEXES_DIR=/home/pasha_bel/apps/conversational-recsys-v1.1/bm25/indexes
 ```
 
-Each index is a folder in `indexes/`; its name is the `index` value in requests.
-The `genres` index is required (it is the default). Other indexes are picked up automatically.
-Add one with `build_index.py --field <column> ... --out indexes/<name>` (see its docstring).
-
-## Run
+Restart with the existing service manager. For a manual launch from `bm25/`:
 
 ```bash
-BM25_INDEXES_DIR=indexes uvicorn app:app --port 8000
+uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
-- API page: http://localhost:8000/docs
-- Health and loaded indexes: http://localhost:8000/health
-
-Indexes are read once at startup: after rebuilding, restart the service.
+Indexes load once at startup. Verify `/health`: default `cards`, 64016 items,
+and the packaged `index_version`. Rollback requires restoring BOTH the previous
+code and indexes, then restarting. No upload or reload endpoint is provided.
 
 ## API
 
-`POST /bm25/search`
+`POST /bm25/search` with header `X-API-Key`:
 
 ```json
-{"words": ["rock", "indie"], "k": 20, "exclude_ids": [], "index": "genres"}
+{"words": ["upbeat", "dreamy", "indie", "rock"], "k": 200, "exclude_ids": []}
 ```
 
-```json
-{"ids": ["..."], "scores": [0.0], "index": "genres", "index_version": "..."}
+Response fields: `ids` (Music4All `m4a_id`), `scores`, `index`, `index_version`.
+`ids[i]` and `scores[i]` refer to the same track. Queries use the notebook's
+bm25s tokenizer, English stopwords and no stemming. Repeated terms contribute
+repeatedly, just as in the notebook. Scores are not normalized or rescaled.
+Exclusions apply before top-k. Only positive-scoring matches are returned:
+there is no zero-score backfill. Equal scores use document order, which in the
+supplied model is sorted `m4a_id` order.
+
+Limits remain: `k` 1..1000, up to 256 word/phrase strings and 100000 excluded IDs.
+Unknown index names return 404, invalid requests 422, invalid API keys 401.
+Old `build_index.py` and `bm25.py` remain offline legacy utilities; the service
+does not import them or load their models.
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest tests -q
 ```
-
-- Ids are `m4a_id`. Words are matched exactly (lowercased, split on spaces); unknown words are ignored.
-- `k` 1..1000, `words` up to 256, `exclude_ids` up to 100 000.
-- Errors: 404 unknown index, 422 invalid body, 401 bad key (only if `BM25_API_KEY` is set).
-
-## Env
-
-| Variable | Meaning |
-|---|---|
-| `BM25_INDEXES_DIR` | Folder with indexes. |
-| `BM25_API_KEY` | If set, requests need header `X-API-Key`. Empty = no auth. |

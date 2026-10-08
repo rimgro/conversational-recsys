@@ -5,3 +5,4 @@ pyarrow
 fastapi
 uvicorn
 pydantic>=2
+bm25s==0.3.13

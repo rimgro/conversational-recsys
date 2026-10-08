@@ -2,17 +2,27 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
-from bm25 import save_bm25, train_bm25
 
 KEY = 'secret'
 
 
 @pytest.fixture
 def client(items, tmp_path, monkeypatch):
-    save_bm25(train_bm25(items), tmp_path / 'genres')
-    tags = pd.DataFrame({'spotify_id': ['t1', 't2'], 'genres': ['chill', 'sad']})
-    save_bm25(train_bm25(tags), tmp_path / 'tags')
-    (tmp_path / 'not-an-index').mkdir()
+    import bm25s
+    import json
+    import numpy as np
+    path = tmp_path / 'cards'
+    bm = bm25s.BM25(method='lucene')
+    bm.index(bm25s.tokenize(['pop dance pop', 'rock hard rock', '', '',
+                           'r&b k-pop', 'alternative rock indie pop'],
+                          stopwords='en', show_progress=False), show_progress=False)
+    bm.save(str(path), show_progress=False)
+    pd.DataFrame({'item_col': np.arange(6),
+                  'm4a_id': list('abcdef')}).to_parquet(path / 'items.parquet')
+    (path / 'meta.json').write_text(json.dumps({'format': 'bm25s-cards-v1',
+        'library_version': '0.3.13', 'index_version': 'testversion1'}))
+    (path / 'tokenization.json').write_text(json.dumps(
+        {'stopwords': 'en', 'stemming': False}))
     monkeypatch.setenv('BM25_INDEXES_DIR', str(tmp_path))
     monkeypatch.setenv('BM25_API_KEY', KEY)
     from app import app
@@ -32,15 +42,19 @@ def test_search(client):
     assert len(data['ids']) == 2 == len(data['scores'])
     assert data['scores'] == sorted(data['scores'], reverse=True)
     assert len(data['index_version']) == 12
-    assert data['index'] == 'genres'
+    assert data['index'] == 'cards'
 
 
 def test_select_index(client):
-    r = search(client, {'words': ['chill'], 'k': 5, 'index': 'tags'}).json()
-    assert r['ids'] == ['t1'] and r['index'] == 'tags'
-    assert search(client, {'words': ['chill'], 'k': 5}).json()['ids'] == []
-    r = search(client, {'words': ['chill'], 'k': 5, 'index': 'nope'})
-    assert r.status_code == 404
+    body = {'words': ['rock'], 'k': 5}
+    default = search(client, body).json()
+    assert default['index'] == 'cards'
+    for name in ['cards', 'genres', 'tags']:
+        data = search(client, dict(body, index=name)).json()
+        assert data['ids'] == default['ids']
+        assert data['scores'] == default['scores']
+        assert data['index'] == name
+    assert search(client, dict(body, index='nope')).status_code == 404
 
 
 def test_exclude_ids(client):
@@ -82,6 +96,32 @@ def test_health_without_key(client):
     r = client.get('/health')
     assert r.status_code == 200
     data = r.json()
-    assert data['status'] == 'ok' and data['default_index'] == 'genres'
-    assert set(data['indexes']) == {'genres', 'tags'}
-    assert data['indexes']['genres']['n_items'] == 6
+    assert data['status'] == 'ok' and data['default_index'] == 'cards'
+    assert set(data['indexes']) == {'cards'}
+    assert data['indexes']['cards']['n_items'] == 6
+
+@pytest.mark.parametrize('words', [[], ['the', 'and'], ['zzzzzzunknown']])
+def test_no_matching_tokens(client, words):
+    data = search(client, {'words': words, 'k': 200}).json()
+    assert data['ids'] == data['scores'] == []
+
+
+def test_all_tracks_excluded(client):
+    data = search(client, {'words': ['rock'], 'k': 200,
+                          'exclude_ids': list('abcdef')}).json()
+    assert data['ids'] == data['scores'] == []
+
+
+def test_scores_match_bm25s(client):
+    import bm25s
+    import numpy as np
+    model = client.app.state.models['cards']
+    words = ['rock', 'rock', 'indie']
+    tokens = bm25s.tokenize([' '.join(words)], stopwords='en',
+                           return_ids=False, show_progress=False)[0]
+    scores = model['bm'].get_scores(tokens)
+    positions = np.flatnonzero(scores > 0)
+    positions = positions[np.lexsort((positions, -scores[positions]))]
+    actual = search(client, {'words': words, 'k': 200}).json()
+    assert actual['ids'] == model['item_ids'][positions].tolist()
+    np.testing.assert_array_equal(actual['scores'], scores[positions])
