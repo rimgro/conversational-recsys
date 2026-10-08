@@ -18,13 +18,26 @@ OVERLAY = os.path.join(ROOT, "configs", "candgen.yaml")
 
 def _api_cfg(cfg, url, **extra):
     base = load_config([os.path.join(ROOT, "configs", "default.yaml"), OVERLAY], {"data": cfg["data"]})
-    return deep_update(base, {"candgen": {"bm25": {"url": url}, "hnsw": {"url": url, "embed": "server"}, **extra}})
+    return deep_update(base, {"candgen": {"bm25": {"url": url}, "hnsw": {"url": url}, **extra}})
 
 
 def _free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+class _FakeEmbedder:
+    """Вместо EmbeddingGemma: единичный вектор из 768 чисел; fail — модель не загрузилась."""
+
+    def __init__(self, fail=False):
+        self.fail, self.texts = fail, []
+
+    def encode(self, text):
+        if self.fail:
+            raise ImportError("No module named 'sentence_transformers'")
+        self.texts.append(text)
+        return [0.0] * 767 + [1.0]
 
 
 @pytest.fixture
@@ -72,6 +85,8 @@ def test_pipeline_calls_services(cfg, data, fake_bm25, monkeypatch):
     pipe = Pipeline.from_config(_api_cfg(cfg, url), data.catalog)
     names = {r.name for r in pipe.retrievers}
     assert {"bm25_genres", "bm25_tags", "hnsw", "audio", "relisten"} <= names and "bm25" not in names
+    hnsw = next(r for r in pipe.retrievers if r.name == "hnsw")
+    hnsw.embedder = _FakeEmbedder()  # настоящую модель в тестах не грузим
     req = Request(dialog=[Message("user", "calm jazz, but not heavy metal")], history=data.requests[0].history,
                   shown_ids=[str(data.catalog.track_ids[0])])
     resp = pipe.run(req, debug=True)
@@ -81,8 +96,9 @@ def test_pipeline_calls_services(cfg, data, fake_bm25, monkeypatch):
     assert path == "/bm25/search" and "jazz" in body["words"] and "heavy" not in body["words"]
     assert body["exclude_ids"] == [str(data.catalog.track_ids[0])]
     assert headers.get("X-Api-Key") == "k123"
-    path, body, headers = by_index[None]  # HNSW: текст реплики как есть, без index, свой ключ
-    assert path == "/hnsw/search" and body["query"] == "calm jazz, but not heavy metal" and "index" not in body
+    path, body, headers = by_index[None]  # HNSW: вектор реплики, без index и без query, свой ключ
+    assert path == "/hnsw/search" and len(body["vector"]) == 768 and "query" not in body and "index" not in body
+    assert hnsw.embedder.texts == ["calm jazz, but not heavy metal"]
     assert body["exclude_ids"] == [str(data.catalog.track_ids[0])] and headers.get("X-Api-Key") == "h456"
     assert len(resp.debug["candidates"]["bm25_tags"]) == 49 and resp.tracks  # tags ответил после повтора
     bm25 = next(r for r in pipe.retrievers if r.name == "bm25_genres")
@@ -93,6 +109,7 @@ def test_pipeline_calls_services(cfg, data, fake_bm25, monkeypatch):
 def test_bm25_down_does_not_break_pipeline(cfg, data):
     port = _free_port()  # на нём никто не слушает
     pipe = Pipeline.from_config(_api_cfg(cfg, f"http://127.0.0.1:{port}", timeout=0.5), data.catalog)
+    next(r for r in pipe.retrievers if r.name == "hnsw").embedder = _FakeEmbedder()
     with pytest.warns(UserWarning, match="кандген недоступен"):
         resp = pipe.run(data.requests[0], debug=True)
     assert resp.tracks  # локальные relisten / title / history / audio / popular работают
@@ -134,23 +151,13 @@ def test_load_env(tmp_path, monkeypatch):
 
 
 def test_hnsw_sends_vector_built_locally(cfg, data, fake_bm25):
-    """embed: local — в HNSW уходит вектор (по рецепту сервиса), а не текст; модель не загрузилась — текст."""
+    """В HNSW уходит вектор (по рецепту сервиса), а не текст; модель не загрузилась — источник пропускается."""
     from recsys.retrieval.query_embedder import query_text
     url, calls = fake_bm25
 
-    class FakeEmbedder:
-        def __init__(self, fail=False):
-            self.fail, self.texts = fail, []
-
-        def encode(self, text):
-            if self.fail:
-                raise ImportError("No module named 'sentence_transformers'")
-            self.texts.append(text)
-            return [0.0] * 767 + [1.0]
-
     pipe = Pipeline.from_config(_api_cfg(cfg, url), data.catalog)
     hnsw = next(r for r in pipe.retrievers if r.name == "hnsw")
-    hnsw.embedder = FakeEmbedder()
+    hnsw.embedder = _FakeEmbedder()
     req = Request(dialog=[Message("user", "calm  jazz\nfor   night")], history=data.requests[0].history)
     pipe.run(req)
     body = next(b for p, b, h in calls if p == "/hnsw/search")
@@ -158,8 +165,8 @@ def test_hnsw_sends_vector_built_locally(cfg, data, fake_bm25):
     assert query_text("calm  jazz\nfor   night") == "task: search result | query: calm jazz for night"
 
     calls.clear()
-    hnsw.embedder = FakeEmbedder(fail=True)
+    hnsw.embedder = _FakeEmbedder(fail=True)
     with pytest.warns(UserWarning, match="вектор запроса не построен"):
-        pipe.run(req)
-    body = next(b for p, b, h in calls if p == "/hnsw/search")
-    assert body["query"] == "calm  jazz\nfor   night" and "vector" not in body and hnsw.embed_error
+        resp = pipe.run(req, debug=True)
+    assert not [b for p, b, h in calls if p == "/hnsw/search"] and hnsw.embed_error
+    assert resp.debug["n_candidates"]["hnsw"] == 0 and resp.tracks

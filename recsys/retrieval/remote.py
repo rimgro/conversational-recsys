@@ -6,7 +6,7 @@
 
   bm25_api   POST /bm25/search  слова из саммари -> индекс genres / tags / title     (candgen.bm25)
   hnsw_api   POST /hnsw/search  вектор последней реплики (EmbeddingGemma, строим сами) -> LanceDB  (candgen.hnsw);
-                                если вектор построить не вышло — текст, и сервис строит его сам
+                                сервис принимает только vector: без модели источник пропускается
 
 Конфиг: раздел candgen (timeout, retries; bm25 / hnsw: url, api_key) + источники с type: bm25_api | hnsw_api.
 Значения вида ${VAR} и ${VAR:-по умолчанию} берутся из переменных окружения (и файла .env).
@@ -186,8 +186,9 @@ class BM25APIRetriever(_RemoteRetriever):
 
 class HNSWAPIRetriever(_RemoteRetriever):
     """Текстовый семантический поиск в LanceDB по последней реплике пользователя (профиль, по замерам автора, вредит).
-    embedder задан (candgen.hnsw.embed: local) — вектор EmbeddingGemma-2 строим сами и отправляем vector;
-    иначе или если модель не загрузилась — отправляем текст, вектор строит сервис (на CPU, медленнее)."""
+    Вектор EmbeddingGemma-2 строим сами (recsys/retrieval/query_embedder.py) и отправляем vector: текст сервис
+    не принимает. Модель не загрузилась (нет sentence-transformers, GPU или доступа к ней) — предупреждение один раз,
+    дальше источник пропускается, остальные работают."""
     service = "hnsw"
     path = "/hnsw/search"
     health_path = "/health"
@@ -203,13 +204,14 @@ class HNSWAPIRetriever(_RemoteRetriever):
         text = messages[-1].strip()[:self.MAX_CHARS] if messages else ""
         if not text:
             return None
-        if self.embedder is not None and self.embed_error is None:
-            try:
-                return {"vector": self.embedder.encode(text), "k": k}
-            except Exception as e:  # нет sentence-transformers / GPU / доступа к модели
-                self.embed_error = f"{type(e).__name__}: {e}"
-                warnings.warn(f"{self.name}: вектор запроса не построен, отправляем текст ({self.embed_error})")
-        return {"query": text, "k": k}
+        if self.embedder is None or self.embed_error is not None:
+            return None
+        try:
+            return {"vector": self.embedder.encode(text), "k": k}
+        except Exception as e:  # нет sentence-transformers / GPU / доступа к модели
+            self.embed_error = f"{type(e).__name__}: {e}"
+            warnings.warn(f"{self.name}: вектор запроса не построен, источник пропущен ({self.embed_error})")
+            return None
 
     def health(self) -> Dict[str, Any]:
         try:

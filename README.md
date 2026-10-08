@@ -104,7 +104,7 @@ python evaluate.py --set ranker.type=heuristic      # любой парамет�
 | `audio` | эмбеддинги MuQ, ближайшие к треку-образцу (similar_to) или к центру вкуса | similar_to, audio_attributes |
 | `popular` | популярное в жанрах пользователя | холодный старт |
 | `bm25_genres`, `bm25_tags`, `bm25_title` | BM25 с сервера (`type: bm25_api`); `bm25_title` ждёт индекса title | как `bm25` / `title` |
-| `hnsw` | текстовый семантический поиск с сервера: вектор реплики строим сами (EmbeddingGemma, `candgen.hnsw.embed: local`), без модели — шлём текст | exact, lyrics_recall, vague_recall |
+| `hnsw` | текстовый семантический поиск с сервера: вектор реплики строим сами (EmbeddingGemma), сервис принимает только вектор; без модели источник пропускается | exact, lyrics_recall, vague_recall |
 
 Контракты между шагами: `recsys/schemas.py` (`Request`, `DialogSummary`, `Candidate`, `FusedCandidate`, `RankedTrack`, `Response`).
 
