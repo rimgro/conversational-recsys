@@ -751,6 +751,42 @@ def cmd_add_tags(args: argparse.Namespace) -> None:
     add_tags_column(args.src_db, args.dst_db, tags_by_id)
 
 
+def measure_rps(
+    table: Any,
+    queries: list[dict[str, Any]],
+    *,
+    approach: str,
+    embedder: Any = None,
+    tagger: BaseTagger | None = None,
+    metadata_df: Any = None,
+    sample: int = 200,
+    k: int = 20,
+    threshold: float = 0.6,
+) -> dict[str, float]:
+    """End-to-end single-request latency (batch=1): embed + tags + search."""
+    subset = queries[: max(1, min(sample, len(queries)))]
+    lat: list[float] = []
+    for q in subset:
+        text = q["query"]
+        t0 = time.perf_counter()
+        vec = None
+        if approach in ("vector", "hybrid"):
+            vec = embedder.encode([f"task: search result | query: {text}"], batch_size=1)[0]
+        if approach in ("tags", "hybrid"):
+            include, exclude = extract_query_tags(text, tagger, threshold=threshold)
+        else:
+            include, exclude = [], []
+        if approach == "vector":
+            search_vector(table, vec, k)
+        elif approach == "hybrid":
+            search_hybrid(table, vec, include, exclude, k)
+        elif approach == "tags":
+            search_tags_only(metadata_df, include, exclude, k)
+        lat.append(time.perf_counter() - t0)
+    mean = sum(lat) / max(1, len(lat))
+    return {"n": len(lat), "latency_ms_mean": 1000.0 * mean, "rps": 1.0 / mean if mean else 0.0}
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="LanceDB pre-filtering with diffusion tags")
     sub = p.add_subparsers(dest="command", required=True)

@@ -140,6 +140,17 @@ def main() -> int:
             threshold=args.query_threshold,
         )
         metrics["seconds"] = time.time() - t
+        try:
+            e2e = pre.measure_rps(
+                table, queries, approach=approach, embedder=embedder,
+                tagger=query_tagger, metadata_df=metadata_df,
+                sample=200, k=20, threshold=args.query_threshold,
+            )
+            metrics["rps_e2e"] = e2e["rps"]
+            metrics["latency_e2e_ms"] = e2e["latency_ms_mean"]
+        except Exception as exc:  # pragma: no cover
+            metrics["rps_e2e"] = None
+            print(f"[run] e2e rps failed for {approach}: {exc}", flush=True)
         results[approach] = metrics
         (out / f"results_en_{approach}.json").write_text(
             json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8"
