@@ -9,7 +9,7 @@
 | Ноутбук | Для чего |
 |---|---|
 | `inference.ipynb` | запрос пользователя → ответ и треки; следующая реплика |
-| `main.ipynb` | эксперименты: разбор шагов, метрики по типам запросов, сравнение вариантов, LLM |
+| `experiments.ipynb` | почему такая выдача: разбор запроса по шагам, как правила понимают настоящие запросы, сравнение вариантов конфига, LLM |
 | `examples/candgen.ipynb` | проверка сервиса BM25 руками: какие запросы и что он отвечает |
 
 ## Запуск
@@ -103,7 +103,7 @@ python evaluate.py --data-dir "CRS dataset" --set ranker.type=heuristic # люб
 inference.ipynb            инференс: запрос -> ответ
 evaluate.py                валидация: метрики на test_public -> outputs/
 jobs/evaluate.yaml         то же в DataSphere Jobs
-main.ipynb                 эксперименты и метрики
+experiments.ipynb          эксперименты: разбор по шагам, сравнение вариантов
 configs/default.yaml       все параметры и переключатели
 configs/candgen.yaml       надстройка: BM25 с сервера по HTTP
 docs/dataset.md            описание датасета
