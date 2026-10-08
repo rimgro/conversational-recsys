@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable, Iterator, List, Tuple
+from typing import Iterable, List
 
 # Варианты написания, которые приводим к одному виду (по целой строке и по словам).
 TAG_SYNONYMS = {
@@ -83,13 +83,6 @@ def is_cyrillic(token: str) -> bool:
 
 def split_clauses(text: str) -> List[str]:
     return [c.strip() for c in _CLAUSE_SPLIT_RE.split(str(text)) if c and c.strip()]
-
-
-def ngrams(tokens: List[str], n_max: int) -> Iterator[Tuple[int, int, str]]:
-    """Все n-граммы длиной от n_max до 1: (start, end, 'phrase'), длинные первыми."""
-    for n in range(min(n_max, len(tokens)), 0, -1):
-        for i in range(len(tokens) - n + 1):
-            yield i, i + n, " ".join(tokens[i:i + n])
 
 
 def tag_matches(query_tag: str, track_tags: Iterable[str]) -> bool:

@@ -38,7 +38,6 @@ summarizer:
 candgen:                       # сервисы-кандгены по HTTP (API: docs/candgen_api.md); включается configs/candgen.yaml
   timeout: 5.0                 # секунды на запрос; при ошибке источник пропускается
   retries: 1                   # повтор при обрыве соединения (таймаут не повторяется)
-  headers: {}                  # доп. заголовки ко всем запросам; ${VAR} берётся из окружения
   bm25:
     url: ${BM25_URL}           # адрес сервера BM25 (.env или секрет DataSphere)
     api_key: ${BM25_API_KEY}   # заголовок X-API-Key; пусто = без ключа

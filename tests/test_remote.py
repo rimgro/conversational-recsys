@@ -103,9 +103,8 @@ def test_expand_env(monkeypatch):
     assert expand_env("${BM25_URL:-http://localhost:8001}") == "http://localhost:8001"
     monkeypatch.setenv("BM25_URL", "http://10.0.0.7:8001/")
     assert expand_env("${BM25_URL:-http://localhost:8001}") == "http://10.0.0.7:8001/"
-    c = CandgenClient("${BM25_URL}", api_key="${NO_SUCH_VAR}", headers={"x-trace": "${TRACE:-abc}", "y": "${NONE}"})
+    c = CandgenClient("${BM25_URL}", api_key="${NO_SUCH_VAR}")
     assert c.url == "http://10.0.0.7:8001" and "X-API-Key" not in c.headers
-    assert c.headers["x-trace"] == "abc" and "y" not in c.headers
 
 
 def test_client_config(monkeypatch):

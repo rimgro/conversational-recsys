@@ -14,7 +14,6 @@ import pandas as pd
 from recsys.text import normalize_tag, tokenize
 
 LIST_COLUMNS = ["tags", "tag_weights", "genres"]
-COLUMNS = ["track_id", "title", "artist", "tags", "tag_weights", "genres", "popularity"]
 
 
 class Catalog:
@@ -96,10 +95,6 @@ class Catalog:
 
     def get(self, track_ids: Iterable[str]) -> pd.DataFrame:
         return self.df.iloc[self.positions(track_ids)]
-
-    @property
-    def has_names(self) -> bool:
-        return bool((self.df["artist"] != "").any())
 
     # ------------------------------------------------------------ индексы
 

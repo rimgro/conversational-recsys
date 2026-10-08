@@ -5,8 +5,7 @@ Request -> DialogSummary -> {source: [Candidate]} -> [FusedCandidate] -> feature
 from __future__ import annotations
 
 import copy
-import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 import pandas as pd
@@ -45,45 +44,6 @@ class Request:
     @property
     def user_messages(self) -> List[str]:
         return [m.text for m in self.dialog if m.role == "user"]
-
-    @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "Request":
-        raw_msgs = d.get("dialog", d.get("messages", [])) or []
-        dialog = [
-            m if isinstance(m, Message) else
-            Message(role=str(m.get("role", "user")), text=str(m.get("text", m.get("content", ""))))
-            for m in raw_msgs
-        ]
-        history = []
-        for h in d.get("history", []) or []:
-            if isinstance(h, HistoryItem):
-                history.append(h)
-            elif isinstance(h, dict):
-                history.append(HistoryItem(track_id=str(h["track_id"]), count=float(h.get("count", 1.0)),
-                                           timestamp=h.get("timestamp")))
-            else:
-                history.append(HistoryItem(track_id=str(h)))
-        return cls(
-            dialog=dialog,
-            history=history,
-            user_info=str(d.get("user_info", "") or ""),
-            user_attrs=dict(d.get("user_attrs", {}) or {}),
-            user_id=None if d.get("user_id") is None else str(d["user_id"]),
-            request_id=d.get("request_id", d.get("dialog_id")),
-            shown_ids=[str(x) for x in d.get("shown_ids", [])],
-            liked_ids=[str(x) for x in d.get("liked_ids", [])],
-            skipped_ids=[str(x) for x in d.get("skipped_ids", [])],
-            target_ids=[str(x) for x in d.get("target_ids", d.get("target_track_ids", []))],
-            meta=dict(d.get("meta", {}) or {}),
-        )
-
-    @classmethod
-    def from_json(cls, path: str) -> "Request":
-        with open(path, encoding="utf8") as f:
-            return cls.from_dict(json.load(f))
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
 
     def next_turn(self, response: "Response", user_text: str) -> "Request":
         """Следующая реплика: добавляем ответ ассистента, показанные треки и новое сообщение."""

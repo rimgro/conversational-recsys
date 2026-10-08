@@ -6,7 +6,7 @@
 
   bm25_api   POST /bm25/search  слова из саммари -> индекс genres / tags / title     (candgen.bm25)
 
-Конфиг: раздел candgen (timeout, retries, headers; bm25: url, api_key) + источники с type: bm25_api.
+Конфиг: раздел candgen (timeout, retries; bm25: url, api_key) + источники с type: bm25_api.
 Значения вида ${VAR} и ${VAR:-по умолчанию} берутся из переменных окружения (и файла .env).
 """
 from __future__ import annotations
@@ -27,7 +27,7 @@ from recsys.retrieval.sources import BaseRetriever, TitleRetriever
 from recsys.schemas import Candidate, Context
 
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
-_CLIENT_KEYS = ("url", "timeout", "retries", "api_key", "headers")
+_CLIENT_KEYS = ("url", "timeout", "retries", "api_key")
 
 
 def expand_env(value: Any) -> Any:
@@ -47,19 +47,17 @@ def _is_timeout(e: BaseException) -> bool:
 
 
 class CandgenClient:
-    """JSON по HTTP к одному сервису. X-API-Key, если задан api_key; любые доп. заголовки.
+    """JSON по HTTP к одному сервису; заголовок X-API-Key, если задан api_key.
 
     retries: сколько раз повторить при обрыве соединения (сервис перезапускается, сеть моргнула).
     Таймаут и ответы с HTTP-ошибкой не повторяются, чтобы не умножать задержку.
     """
 
-    def __init__(self, url: str, timeout: float = 5.0, api_key: Optional[str] = None,
-                 headers: Optional[Dict[str, str]] = None, retries: int = 1):
+    def __init__(self, url: str, timeout: float = 5.0, api_key: Optional[str] = None, retries: int = 1):
         self.url = expand_env(url).rstrip("/")
         self.timeout = timeout
         self.retries = retries
         self.headers = {"Content-Type": "application/json"}
-        self.headers.update({k: expand_env(v) for k, v in (headers or {}).items() if expand_env(v)})
         key = expand_env(api_key) if api_key else ""
         if key:
             self.headers["X-API-Key"] = key
@@ -102,7 +100,7 @@ class CandgenClient:
         if not expand_env(c.get("url") or ""):
             raise ValueError(f"candgen.{service}.url не задан (для bm25 — переменная BM25_URL или файл .env)")
         return cls(c["url"], timeout=c.get("timeout", 5.0), api_key=c.get("api_key"),
-                   headers=c.get("headers"), retries=c.get("retries", 1))
+                   retries=c.get("retries", 1))
 
 
 class _RemoteRetriever(BaseRetriever):
@@ -117,7 +115,6 @@ class _RemoteRetriever(BaseRetriever):
         self.client = client
         self.index = index
         self.last_error: Optional[str] = None
-        self.last_response: Optional[Dict[str, Any]] = None
         self.n_errors = 0  # сколько запросов прошло без кандидатов этого источника
 
     def payload(self, ctx: Context, k: int) -> Optional[Dict[str, Any]]:
@@ -137,7 +134,6 @@ class _RemoteRetriever(BaseRetriever):
             self.n_errors += 1
             return []
         self.last_error = None
-        self.last_response = {k: v for k, v in resp.items() if k not in ("ids", "scores")}
         return [Candidate(track_id=str(t), source=self.name, score=float(s), rank=r)
                 for r, (t, s) in enumerate(zip(resp.get("ids", []), resp.get("scores", [])), start=1)]
 
