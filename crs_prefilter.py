@@ -436,10 +436,11 @@ def extract_track_tags(
     lm_tags: Sequence[str] = LM_TAGS,
     threshold: float = 0.8,
     batch_size: int = 8,
+    max_chars: int = 600,
 ) -> dict[str, str]:
     """Offline: LM tags (mood/theme/vocal) + deterministic metadata tags."""
     out: dict[str, str] = {}
-    texts = [track_lm_text(r) for r in records]
+    texts = [track_lm_text(r, max_chars=max_chars) for r in records]
     probs = None
     if len(records):
         import numpy as np

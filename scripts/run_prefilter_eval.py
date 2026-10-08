@@ -51,6 +51,8 @@ def main() -> int:
     p.add_argument("--max-queries", type=int, default=5000)
     p.add_argument("--query-batch", type=int, default=64)
     p.add_argument("--tag-batch", type=int, default=128)
+    p.add_argument("--tag-chunk", type=int, default=1024)
+    p.add_argument("--text-chars", type=int, default=600)
     p.add_argument("--max-length", type=int, default=384)
     p.add_argument("--limit-tracks", type=int, default=None)
     p.add_argument("--approaches", default="vector,tags,hybrid")
@@ -80,25 +82,32 @@ def main() -> int:
     if args.limit_tracks:
         records = records[: args.limit_tracks]
     print(f"[run] tracks: {len(records)}", flush=True)
+    tags_by_id: dict[str, str] = {}
     if tags_path.exists():
-        print("[run] reusing existing tags.jsonl", flush=True)
-        tags_by_id = {}
         for line in tags_path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 o = json.loads(line)
                 tags_by_id[o["m4a_id"]] = o["extracted_tags"]
-    else:
+        print(f"[run] resuming: {len(tags_by_id)} tracks already tagged", flush=True)
+    todo = [r for r in records if r["m4a_id"] not in tags_by_id]
+    if todo:
         if args.tagger == "diffusion":
             tagger = pre.DiffusionTagClassifier(args.tag_model, device=args.device, dtype=args.dtype, max_length=args.max_length)
         else:
             tagger = pre.LexiconTagger()
-        tags_by_id = pre.extract_track_tags(
-            records, tagger, threshold=args.threshold, batch_size=args.tag_batch
-        )
-        tags_path.write_text(
-            "\n".join(json.dumps({"m4a_id": k, "extracted_tags": v}) for k, v in tags_by_id.items()),
-            encoding="utf-8",
-        )
+        # incremental, resumable: classify in chunks and append to tags.jsonl
+        with open(tags_path, "a", encoding="utf-8") as fh:
+            for start in range(0, len(todo), args.tag_chunk):
+                part = todo[start : start + args.tag_chunk]
+                part_tags = pre.extract_track_tags(
+                    part, tagger, threshold=args.threshold,
+                    batch_size=args.tag_batch, max_chars=args.text_chars,
+                )
+                for k, v in part_tags.items():
+                    fh.write(json.dumps({"m4a_id": k, "extracted_tags": v}) + "\n")
+                    tags_by_id[k] = v
+                fh.flush()
+                print(f"[run] tagged {len(tags_by_id)}/{len(records)}", flush=True)
     summary["n_tracks"] = len(records)
     summary["tags_seconds"] = time.time() - t0
     print(f"[run] tags done in {summary['tags_seconds']:.0f}s", flush=True)
