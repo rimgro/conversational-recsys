@@ -12,14 +12,18 @@ import evaluate  # noqa: E402
 
 def test_evaluate_writes_results(tmp_path):
     out = tmp_path / "run"
-    code = evaluate.main(["--synthetic", "--n-users", "20", "--max-positives", "2", "--run-dir", str(out),
+    code = evaluate.main(["--synthetic", "--n-users", "20", "--max-queries", "2", "--run-dir", str(out),
                           "--chunk", "15", "--set", "ranker.type=heuristic"])
     assert code == 0
-    assert {p.name for p in out.iterdir()} == {"metrics.json", "by_query_family.csv", "by_is_new.csv",
+    assert {p.name for p in out.iterdir()} == {"metrics.json", "submission.parquet", "by_query_type.csv", "by_is_new.csv",
                                                 "per_request.csv", "config.yaml"}
     m = json.loads((out / "metrics.json").read_text(encoding="utf-8"))
     assert m["n_users"] == 20 and 20 <= m["n_requests"] <= 40 and m["ranker"] == "heuristic"  # до 2 на пользователя
-    assert 0 <= m["metrics"]["hit@10"] <= 1
+    assert 0 <= m["metrics"]["ndcg@20"] <= 1
+    import pandas as pd
+    sub = pd.read_parquet(out / "submission.parquet")
+    assert list(sub.columns) == ["query_id", "top20", "response"] and len(sub) == m["n_requests"]
+    assert all(len(t) == 20 for t in sub["top20"]) and sub["response"].str.startswith("Hi!").all()
     lines = (out / "per_request.csv").read_text(encoding="utf-8").splitlines()
     assert len(lines) == m["n_requests"] + 1 and lines[0].startswith("request_id")  # заголовок один, хотя писали частями
 

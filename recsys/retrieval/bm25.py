@@ -18,8 +18,7 @@ import pandas as pd
 import scipy.sparse as sp
 
 from recsys.data.catalog import Catalog
-from recsys.ru import decade_tag
-from recsys.text import STOPWORDS, tokenize
+from recsys.text import STOPWORDS, decade_tag, tokenize
 
 
 def tag_token(tag: str) -> str:

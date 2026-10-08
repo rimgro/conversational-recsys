@@ -19,8 +19,7 @@ import pandas as pd
 
 from recsys.data.catalog import Catalog
 from recsys.schemas import Context, FusedCandidate
-from recsys.ru import decade_tag
-from recsys.text import tag_matches
+from recsys.text import decade_tag, tag_matches
 
 
 MISSING_RANK = 1000
@@ -70,21 +69,21 @@ def build_features(fused: List[FusedCandidate], ctx: Context, catalog: Catalog,
 
 
 def reasons_for(track_id: str, ctx: Context, catalog: Catalog, max_reasons: int = 3) -> List[str]:
-    """Короткие причины для объяснения (по-русски): совпавшие теги, артист, история."""
+    """Короткие причины для объяснения (по-английски): совпавшие теги, артист, история."""
     tags = catalog.tags(track_id) + catalog.genres(track_id)
     artist = catalog.artist(track_id)
     matched = [t for t in ctx.summary.include_tags if tag_matches(t, tags)]
-    out = [f"совпадает: {', '.join(matched)}"] if matched else []
+    out = [f"matches: {', '.join(matched)}"] if matched else []
     if artist and artist.lower() in {a.lower() for a in ctx.summary.seed_artists}:
-        out.append(f"это {artist}, как вы просили")
+        out.append(f"{artist}, as you asked")
     elif any(h.track_id == track_id for h in ctx.request.history):
-        out.append("вы уже слушали этот трек")
+        out.append("you have listened to it before")
     elif artist and artist in ctx.profile.artist_weights:
-        out.append(f"вы слушаете {artist}")
+        out.append(f"you listen to {artist}")
     if not out:
         common = [t for t in ctx.profile.top_tags(10) if t in tags][:2]
         if common:
-            out.append("близко к вашему вкусу: " + ", ".join(common))
+            out.append("close to your taste: " + ", ".join(common))
     return out[:max_reasons]
 
 

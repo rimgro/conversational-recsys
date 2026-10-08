@@ -34,13 +34,13 @@ def test_llm_stub_falls_back(cfg, data):
     c = deep_update(cfg, {"summarizer": {"type": "llm"}, "explainer": {"type": "llm"}})
     pipe = Pipeline.from_config(c, data.catalog, llm=StubLLM(""))
     resp = pipe.run(Request(dialog=[Message("user", "some calm jazz")]))
-    assert resp.summary.source == "rule" and resp.text.startswith("Привет!")
+    assert resp.summary.source == "rule" and resp.text.startswith("Hi!")
 
 
 def test_evaluate(cfg, data):
     pipe = Pipeline.from_config(deep_update(cfg, {"ranker": {"type": "heuristic"}}), data.catalog)
     per_req, mean = evaluate(pipe, data.requests[:20], verbose=False)
-    assert len(per_req) > 0 and 0.0 <= mean["hit@10"] <= 1.0
+    assert len(per_req) > 0 and 0.0 <= mean["ndcg@20"] <= 1.0
 
 
 def test_api_ranker_and_fallback(cfg, data):
@@ -87,11 +87,11 @@ def test_metrics_by_family_and_shared_index(cfg, data):
     from recsys.eval import compare_configs, metrics_by
     pipe = Pipeline.from_config(cfg, data.catalog)
     per, _ = evaluate(pipe, data.requests[:30], verbose=False)
-    by = metrics_by(per, "query_family")
-    assert by["n"].sum() == 30 and set(by.index) <= {r.meta["query_family"] for r in data.requests}
+    by = metrics_by(per, "query_type")
+    assert by["n"].sum() == 30 and set(by.index) <= {r.meta["query_type"] for r in data.requests}
     # без bm25 общий индекс берётся у relisten, а не у title/lyrics
     no_bm25 = Pipeline.from_config(deep_update(cfg, {"retrieval": {"bm25": {"enabled": False}}}), data.catalog)
     assert no_bm25.bm25_index is no_bm25.retrievers[0].index and no_bm25.retrievers[0].name == "relisten"
     table = compare_configs(cfg, {"a": {}, "b": {"ranker": {"type": "heuristic"}}}, data.catalog,
-                            data.requests[:20], by="query_family")
+                            data.requests[:20], by="query_type")
     assert list(table.columns) == ["a", "b"] and "ALL" in table.index

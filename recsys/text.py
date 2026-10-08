@@ -1,11 +1,12 @@
-"""Текстовые утилиты: нормализация тегов, токенизация (латиница + кириллица), сопоставление тегов.
+"""Текстовые утилиты: нормализация тегов, токенизация, сопоставление тегов, эпохи / страны / языки в запросе.
 
-Теги Last.fm и саммари на английском, запросы датасета на русском (см. recsys/ru.py).
+Теги Last.fm, запросы датасета и саммари — на английском. Названия и имена бывают на языке оригинала
+(в том числе кириллицей), поэтому токенизатор оставляет и кириллицу.
 """
 from __future__ import annotations
 
 import re
-from typing import Iterable, List
+from typing import Iterable, List, Optional, Tuple
 
 # Варианты написания, которые приводим к одному виду (по целой строке и по словам).
 TAG_SYNONYMS = {
@@ -43,8 +44,7 @@ no not without except avoid hate dislike dislikes don't dont never nothing exclu
 none neither nor
 """.split())
 
-_CLAUSE_SPLIT_RE = re.compile(r"[.,;!?\n]|\b(?:but|however|though)\b|(?<![а-яё])(?:но|а|однако)(?![а-яё])",
-                              re.IGNORECASE)
+_CLAUSE_SPLIT_RE = re.compile(r"[.,;!?\n]|\b(?:but|however|though|although)\b", re.IGNORECASE)
 _TOKEN_RE = re.compile(r"[a-z0-9а-я]+(?:'[a-z]+)?")
 _CYRILLIC_RE = re.compile(r"[а-я]")
 
@@ -92,3 +92,37 @@ def tag_matches(query_tag: str, track_tags: Iterable[str]) -> bool:
     """
     q = f" {query_tag} "
     return any(q in f" {t} " for t in track_tags)
+
+
+# ---------------------------------------------------------------- страны, языки, эпохи в запросе
+
+COUNTRIES_EN = {
+    "usa": "US", "us": "US", "american": "US", "america": "US", "uk": "GB", "british": "GB", "english": "GB",
+    "england": "GB", "scottish": "GB", "german": "DE", "germany": "DE", "french": "FR", "france": "FR",
+    "swedish": "SE", "sweden": "SE", "norwegian": "NO", "finnish": "FI", "icelandic": "IS", "danish": "DK",
+    "dutch": "NL", "belgian": "BE", "japanese": "JP", "japan": "JP", "korean": "KR", "russian": "RU",
+    "spanish": "ES", "spain": "ES", "italian": "IT", "italy": "IT", "canadian": "CA", "canada": "CA",
+    "irish": "IE", "australian": "AU", "brazilian": "BR", "brazil": "BR", "mexican": "MX", "polish": "PL",
+    "argentinian": "AR", "colombian": "CO", "jamaican": "JM", "portuguese": "PT", "greek": "GR", "turkish": "TR",
+}
+# язык текста — только в явном контексте («in spanish», «spanish lyrics»), иначе это страна
+LANGUAGES_EN = {
+    "english": "en", "spanish": "es", "french": "fr", "german": "de", "italian": "it", "portuguese": "pt",
+    "russian": "ru", "japanese": "ja", "korean": "ko", "swedish": "sv", "finnish": "fi", "polish": "pl",
+    "dutch": "nl", "turkish": "tr", "greek": "el", "norwegian": "no", "danish": "da", "icelandic": "is",
+}
+LANGUAGE_CUES = frozenset("lyrics language vocals sung sing singing songs".split())
+_DECADE_RE = re.compile(r"^(19|20)?([0-9])0s$")
+
+
+def decade_tag(year: int) -> str:
+    """1983 -> '80s', 2004 -> '00s', 2012 -> '10s' (как в тегах Last.fm)."""
+    return f"{(int(year) // 10 % 10)}0s"
+
+
+def match_era(token: str) -> Tuple[Optional[str], Optional[int]]:
+    """'80s' / '1980s' -> ('80s', None); '2003' -> ('00s', 2003); иначе (None, None)."""
+    if re.fullmatch(r"(19[5-9]|20[0-2])[0-9]", token):
+        return decade_tag(int(token)), int(token)
+    m = _DECADE_RE.match(token)
+    return (f"{m.group(2)}0s", None) if m else (None, None)

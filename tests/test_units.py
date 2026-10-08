@@ -68,24 +68,40 @@ def test_config_warns_on_typo():
     assert out["ranker"]["type"] == "stub" and out["ranker"]["weights"] == {"rrf_score": 1.0}
 
 
-def test_rule_summarizer_russian(data):
+def test_rule_summarizer_english(data):
     s = RuleSummarizer(data.catalog)
 
     def run(q):
         return s.summarize(Request(dialog=[Message("user", q)]))
 
-    out = run("спокойный британский инди-рок 80-х, но без женского вокала")
+    out = run("calm british indie rock from the 80s, but no female vocalists")
     assert {"calm", "british", "indie rock", "80s"} <= set(out.include_tags)
     assert out.exclude_tags == ["female vocalists"] and out.countries == ["GB"] and out.energy == "low"
-    # «без слов» = хочу инструментал, а не исключение
-    out = run("спокойная музыка, но без слов")
+    # «no vocals» = хочу инструментал, а не исключение
+    out = run("calm music without vocals")
     assert "instrumental" in out.include_tags and not out.exclude_tags
     # отрицание не меняет энергию и не вычищает сказанное раньше
-    out = run("агрессивная музыка но не танцевальная")
+    out = run("aggressive music but not dance")
     assert out.include_tags == ["aggressive"] and out.exclude_tags == ["dance"]
-    out = run("американский рэп 2003 года, только не попса")
+    out = run("american rap from 2003, just no pop")
     assert out.years == [2003] and "00s" in out.include_tags and out.exclude_tags == ["pop"]
     assert "US" in out.countries
+    out = run("songs sung in french")
+    assert out.languages == ["fr"] and not out.countries
+
+
+def test_similar_to_reference_and_novelty(data):
+    s = RuleSummarizer(data.catalog)
+    row = data.catalog.df.iloc[3]
+    q = f"tracks like {row['title'].lower()} by {row['artist'].lower()} but from other artists, more calm"
+    out = s.summarize(Request(dialog=[Message("user", q)]))
+    assert out.seed_track_ids == [row["track_id"]] and out.exclude_artists == [row["artist"]]
+    assert row["artist"] not in out.seed_artists and out.new_tracks and not out.new_artists
+    assert "calm" in out.include_tags
+    out = s.summarize(Request(dialog=[Message("user", "new artists please, something i haven't heard")]))
+    assert out.new_tracks and out.new_artists
+    out = s.summarize(Request(dialog=[Message("user", "smooth 80s new wave track")]))
+    assert not out.new_tracks
 
 
 def test_llm_summary_merge():
@@ -98,15 +114,9 @@ def test_llm_summary_merge():
     assert out.query == "american hip hop Suga Suga" and out.source == "llm+rule"
 
 
-def test_profile_start_year_is_not_a_taste(data):
-    req = Request(dialog=[Message("user", "джаз")],
-                  user_info="Слушает музыку с 2010 года; до периода 300 прослушиваний. Любимые жанры: folk, metal.")
+def test_profile_numbers_are_not_tastes(data):
+    req = Request(dialog=[Message("user", "jazz")],
+                  user_info="Listening since 2010; 300 plays before this period. Favourite genres: folk, metal. "
+                            "Song languages: en 99%.")
     out = RuleSummarizer(data.catalog).summarize(req)
     assert out.user_tags == ["folk", "metal"]
-
-
-def test_ru_comparative_with_po():
-    from recsys.ru import lookup_stem
-    assert lookup_stem("поэнергичнее") == lookup_stem("энергичный")
-    assert lookup_stem("повеселее") == lookup_stem("веселый") and lookup_stem("побыстрее") == lookup_stem("быстрый")
-    assert lookup_stem("поэтому") is None and lookup_stem("подробнее") is None

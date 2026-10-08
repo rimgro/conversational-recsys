@@ -1,23 +1,22 @@
-"""Music4All-CRS (описание: docs/dataset.md).
+"""Music4All-CRS (описание: docs/dataset.md), файлы в папке data.crs.dir.
 
-tracks_meta.parquet            каталог: 64k треков, теги, жанры, аудио-атрибуты, тексты, эмбеддинги MuQ
-train / test_public.parquet    строка = пользователь: история (все прослушивания до окна) + позитивы окна,
-                               у каждого позитива свой запрос на русском и тип запроса (query_family)
-Каждый файл может лежать частями: train-00000-of-00078.parquet, ... (так выложен полный датасет).
+tracks_meta.parquet               каталог: 64k треков, теги, жанры, аудио-атрибуты, тексты, эмбеддинги MuQ
+train / test_public.parquet       строка = пользователь: история (все прослушивания до окна) и профиль
+{split}_queries.parquet           запросы на английском: query_id, user_id, query, source, query_type
+{split}_qrels.parquet             ответы: target_m4a_id; для similar_to — exclude_m4a_id / exclude_artist
 
-Один Request = один позитив: запрос -> ровно одна цель (m4a_id). 93% целей уже есть в истории
-(is_new=False), поэтому прослушанное нельзя отфильтровывать.
+Один Request = один query_id: запрос -> ровно одна цель. 13 типов: 11 к позитивам (большинство целей уже есть
+в истории, поэтому прослушанное по умолчанию не отфильтровывается) + novelty и similar_to (цель — новый трек).
 """
 from __future__ import annotations
 
-import glob
 import json
 import os
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
-import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from recsys.data.catalog import Catalog
@@ -34,28 +33,18 @@ _RAW_COLUMNS = ["m4a_id", "m4a_artist", "m4a_song", "m4a_album", "artist", "titl
 
 # ---------------------------------------------------------------- каталог
 
-def parquet_files(directory: str, name: str) -> List[str]:
-    """<name>.parquet или его части <name>-00000-of-000NN.parquet."""
-    single = os.path.join(directory, f"{name}.parquet")
-    if os.path.exists(single):
-        return [single]
-    parts = sorted(glob.glob(os.path.join(directory, f"{name}-*.parquet")))
-    if not parts:
-        raise FileNotFoundError(f"нет {single} и частей {name}-*.parquet в {directory}")
-    return parts
+def split_path(directory: str, name: str) -> str:
+    path = os.path.join(directory, f"{name}.parquet")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"нет {path}: положите файлы Music4All-CRS в {directory} (docs/dataset.md)")
+    return path
 
 
-def _read_table(path: Union[str, List[str]], columns: Optional[List[str]] = None) -> pa.Table:
-    files = [path] if isinstance(path, str) else list(path)
-    return pa.concat_tables([pq.read_table(f, columns=columns) for f in files])
-
-
-def read_tracks_meta(path: Union[str, List[str]], with_lyrics: bool = False) -> pd.DataFrame:
-    """Читает только нужные колонки (в файле их ~100, включая длинные тексты). path — файл или список частей."""
+def read_tracks_meta(path: str, with_lyrics: bool = False) -> pd.DataFrame:
+    """Читает только нужные колонки (в файле их ~75, включая длинные тексты)."""
     wanted = _RAW_COLUMNS + EXTRA_COLUMNS + (["lyrics"] if with_lyrics else [])
-    first = path if isinstance(path, str) else path[0]
-    present = set(pq.read_schema(first).names)
-    return _read_table(path, columns=[c for c in wanted if c in present]).to_pandas()
+    present = set(pq.read_schema(path).names)
+    return pq.read_table(path, columns=[c for c in wanted if c in present]).to_pandas()
 
 
 def _parse_tag_weights(raw: Any, max_tags: int):
@@ -100,23 +89,21 @@ def catalog_from_meta(meta: pd.DataFrame, max_tags: int = 20) -> Catalog:
 
 # ---------------------------------------------------------------- сплиты
 
-def read_split(path: Union[str, List[str]], n_users: Optional[int] = None, seed: int = 42) -> pd.DataFrame:
-    """Сэмпл пользователей до перевода в pandas: полная история в pandas занимает гигабайты.
-    path — файл или список частей; части читаются по одной, из каждой берутся только выбранные строки."""
-    files = [path] if isinstance(path, str) else list(path)
-    sizes = [pq.read_metadata(f).num_rows for f in files]
-    total = sum(sizes)
-    idx = np.arange(total)
-    if n_users is not None and n_users < total:
-        idx = np.sort(np.random.default_rng(seed).choice(total, size=n_users, replace=False))
-    tables, offset = [], 0
-    for f, n in zip(files, sizes):
-        local = idx[(idx >= offset) & (idx < offset + n)] - offset
-        if len(local):
-            t = pq.read_table(f)
-            tables.append(t if len(local) == n else t.take(local))
-        offset += n
-    return pa.concat_tables(tables).to_pandas()
+_USER_COLUMNS = ["user_id", "split", "history", "history_ts", "user_profile", "user_demographics"]
+
+
+def read_split(directory: str, split: str, n_users: Optional[int] = None,
+               seed: int = 42) -> Dict[str, pd.DataFrame]:
+    """{users, queries, qrels} сплита. Пользователи сэмплируются до перевода в pandas (полная история — гигабайты),
+    запросы и ответы читаются только для выбранных пользователей."""
+    users = pq.read_table(split_path(directory, split), columns=_USER_COLUMNS)
+    if n_users is not None and n_users < users.num_rows:
+        users = users.take(np.sort(np.random.default_rng(seed).choice(users.num_rows, size=n_users, replace=False)))
+    queries = pq.read_table(split_path(directory, f"{split}_queries"))
+    queries = queries.filter(pc.is_in(queries["user_id"], value_set=users["user_id"]))
+    qrels = pq.read_table(split_path(directory, f"{split}_qrels"))
+    qrels = qrels.filter(pc.is_in(qrels["query_id"], value_set=queries["query_id"]))
+    return {"users": users.to_pandas(), "queries": queries.to_pandas(), "qrels": qrels.to_pandas()}
 
 
 def aggregate_history(history: Sequence[str], history_ts: Optional[Sequence[int]] = None) -> List[HistoryItem]:
@@ -148,37 +135,48 @@ def parse_demographics(raw: Any) -> Dict[str, Any]:
     return out
 
 
-def requests_from_split(df: pd.DataFrame, max_positives_per_user: Optional[int] = None,
-                        seed: int = 42) -> List[Request]:
-    """Строка пользователя -> по Request на позитив. История одного пользователя — общий список."""
+def _missing(x: Any) -> bool:
+    return x is None or (isinstance(x, float) and np.isnan(x))
+
+
+def requests_from_tables(tables: Dict[str, pd.DataFrame], max_queries_per_user: Optional[int] = None,
+                         seed: int = 42, catalog: Optional[Catalog] = None) -> List[Request]:
+    """users + queries + qrels -> по Request на query_id. История одного пользователя — общий список.
+    catalog — чтобы подписать цель (артист, название) в meta."""
     rng = np.random.default_rng(seed)
+    qrels = tables["qrels"].set_index("query_id").to_dict("index")
+    by_user = {u: g for u, g in tables["queries"].groupby("user_id", sort=False)}
     out: List[Request] = []
-    for row in df.itertuples(index=False):
-        positives = list(row.positives)
-        if max_positives_per_user is not None and len(positives) > max_positives_per_user:
-            keep = np.sort(rng.choice(len(positives), size=max_positives_per_user, replace=False))
-            positives = [positives[i] for i in keep]
-        history = aggregate_history(row.history, getattr(row, "history_ts", None))
-        attrs = parse_demographics(getattr(row, "user_demographics", None))
-        user_id = str(row.user_id)
-        split = str(getattr(row, "split", ""))
-        for p in positives:
+    for row in tables["users"].itertuples(index=False):
+        queries = by_user.get(row.user_id)
+        if queries is None:
+            continue
+        if max_queries_per_user is not None and len(queries) > max_queries_per_user:
+            queries = queries.iloc[np.sort(rng.choice(len(queries), size=max_queries_per_user, replace=False))]
+        history = aggregate_history(row.history, row.history_ts)
+        attrs = parse_demographics(row.user_demographics)
+        for q in queries.itertuples(index=False):
+            ans = qrels[q.query_id]
+            target = str(ans["target_m4a_id"])
+            info = (catalog.row(target) if catalog is not None else None) or {}
             out.append(Request(
-                dialog=[Message("user", str(p["query"]))],
+                dialog=[Message("user", str(q.query))],
                 history=history,
-                user_info=str(getattr(row, "user_profile", "") or ""),
+                user_info=str(row.user_profile or ""),
                 user_attrs=attrs,
-                user_id=user_id,
-                request_id=f"{split}|{user_id}|{p['m4a_id']}",
-                target_ids=[str(p["m4a_id"])],
+                user_id=str(row.user_id),
+                request_id=str(q.query_id),
+                target_ids=[target],
                 meta={
-                    "split": split,
-                    "query_family": p.get("query_family"),
-                    "is_new": bool(p.get("is_new")),
-                    "n_listens": int(p.get("n_listens") or 0),
-                    "ts": int(p.get("ts") or 0),
-                    "artist": p.get("artist"),
-                    "title": p.get("title"),
+                    "split": str(q.split),
+                    "query_type": str(q.query_type),
+                    "source": str(q.source),
+                    "is_new": bool(ans["is_new"]),
+                    "ts": int(ans["ts"]),
+                    "exclude_ids": [] if _missing(ans["exclude_m4a_id"]) else [str(ans["exclude_m4a_id"])],
+                    "exclude_artist": None if _missing(ans["exclude_artist"]) else str(ans["exclude_artist"]),
+                    "artist": info.get("artist"),
+                    "title": info.get("title"),
                 },
             ))
     return out

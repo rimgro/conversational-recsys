@@ -1,4 +1,6 @@
-"""Офлайн-оценка: метрики выдачи + recall каждого источника кандидатов.
+"""Офлайн-оценка как в датасете: nDCG@20 с одной целью (1/log2(rank+1), если цель в топ-20), по query_type;
+плюс hit / mrr и recall каждого источника кандидатов. Для similar_to перед подсчётом из выдачи убираются
+сам трек-образец (exclude_ids) и все треки его артиста (exclude_artist).
 """
 
 from __future__ import annotations
@@ -43,22 +45,33 @@ def mrr_at_k(rec: Sequence[str], targets: Iterable[str], k: int) -> float:
     return 0.0
 
 
-def evaluate(pipeline: Pipeline, requests: List[Request], k: int = 10,
-             verbose: bool = True) -> Tuple[pd.DataFrame, pd.Series]:
-    """-> (метрики по запросам, средние). Берутся только запросы с target_ids."""
+def scored_ids(track_ids: Sequence[str], request: Request, catalog: Catalog) -> List[str]:
+    """Выдача так, как её видит метрика: без exclude_ids и треков exclude_artist (similar_to)."""
+    banned = set(request.meta.get("exclude_ids") or [])
+    artist = (request.meta.get("exclude_artist") or "").lower()
+    return [t for t in track_ids if t not in banned and not (artist and catalog.artist(t).lower() == artist)]
+
+
+ID_COLUMNS = ["request_id", "query_type", "is_new"]
+OUTPUT_COLUMNS = ["top", "response"]
+
+
+def evaluate(pipeline: Pipeline, requests: List[Request], k: int = 20, verbose: bool = True,
+             outputs: bool = False) -> Tuple[pd.DataFrame, pd.Series]:
+    """-> (метрики по запросам, средние). Берутся только запросы с target_ids. Нужен ranker.top_k >= k.
+    outputs=True — ещё колонки top (выдача, top-k id) и response (текст ответа): для файла сабмита."""
     rows: List[Dict[str, Any]] = []
     reqs = [r for r in requests if r.target_ids]
     t0 = time.time()
     for i, req in enumerate(reqs):
         resp = pipeline.run(req, debug=True)
-        rec = resp.track_ids
+        rec = scored_ids(resp.track_ids, req, pipeline.catalog)
         row: Dict[str, Any] = {
             "request_id": req.request_id,
-            "query_family": req.meta.get("query_family"),
+            "query_type": req.meta.get("query_type"),
             "is_new": req.meta.get("is_new"),
-            f"hit@{k}": hit_rate_at_k(rec, req.target_ids, k),
-            f"recall@{k}": recall_at_k(rec, req.target_ids, k),
             f"ndcg@{k}": ndcg_at_k(rec, req.target_ids, k),
+            f"hit@{k}": hit_rate_at_k(rec, req.target_ids, k),
             f"mrr@{k}": mrr_at_k(rec, req.target_ids, k),
         }
         fused_ids = [f.track_id for f in resp.debug["fused"]]
@@ -66,16 +79,18 @@ def evaluate(pipeline: Pipeline, requests: List[Request], k: int = 10,
         for src, cands in resp.debug["candidates"].items():
             ids = [c.track_id for c in cands]
             row[f"recall@{src}"] = recall_at_k(ids, req.target_ids, len(ids))
+        if outputs:
+            row.update(top=resp.track_ids[:k], response=resp.text)
         rows.append(row)
         if verbose and (i + 1) % 50 == 0:
             print(f"  {i + 1}/{len(reqs)}  {time.time() - t0:.1f} c")
     df = pd.DataFrame(rows)
-    metrics = df.drop(columns=["request_id", "query_family", "is_new"]) if len(df) else df
+    metrics = df.drop(columns=[c for c in ID_COLUMNS + OUTPUT_COLUMNS if c in df]) if len(df) else df
     return df, metrics.mean(numeric_only=True) if len(df) else pd.Series(dtype=float)
 
 
-def metrics_by(per_request: pd.DataFrame, by: str = "query_family") -> pd.DataFrame:
-    """Средние метрики по группам (query_family / is_new) + число запросов в группе."""
+def metrics_by(per_request: pd.DataFrame, by: str = "query_type") -> pd.DataFrame:
+    """Средние метрики по группам (query_type / is_new) + число запросов в группе."""
     cols = [c for c in per_request.columns if "@" in c]
     out = per_request.groupby(by)[cols].mean()
     out.insert(0, "n", per_request.groupby(by).size())
@@ -83,16 +98,16 @@ def metrics_by(per_request: pd.DataFrame, by: str = "query_family") -> pd.DataFr
 
 
 def compare_configs(base_cfg: Dict[str, Any], variants: Dict[str, Dict[str, Any]], catalog: Catalog,
-                    requests: List[Request], k: int = 10, llm: Optional[BaseLLM] = None,
+                    requests: List[Request], k: int = 20, llm: Optional[BaseLLM] = None,
                     by: Optional[str] = None, metric: Optional[str] = None) -> pd.DataFrame:
     """Метрики для нескольких вариантов конфига (BM25-индекс по тегам строится один раз).
 
     by=None: строка = вариант, колонки = средние метрики.
-    by="query_family": строка = группа, колонки = варианты, значение = metric (по умолчанию hit@k).
+    by="query_type": строка = группа, колонки = варианты, значение = metric (по умолчанию ndcg@k).
     """
     index = None
     out = {}
-    metric = metric or f"hit@{k}"
+    metric = metric or f"ndcg@{k}"
     for name, overrides in variants.items():
         cfg = deep_update(base_cfg, overrides)
         pipe = Pipeline.from_config(cfg, catalog, llm=llm, bm25_index=index)

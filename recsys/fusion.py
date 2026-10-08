@@ -33,10 +33,13 @@ def rrf(lists: Dict[str, List[Candidate]], k: int = 60,
 
 
 def apply_filters(fused: List[FusedCandidate], ctx: Context, catalog: Catalog) -> List[FusedCandidate]:
-    """Убирает ctx.banned_ids, неизвестные каталогу треки, исключённые теги и артистов."""
+    """Убирает ctx.banned_ids, неизвестные каталогу треки, исключённые теги и артистов
+    (для novelty — ещё и всех артистов из истории пользователя)."""
     banned = ctx.banned_ids
     ex_tags = ctx.summary.exclude_tags
     ex_artists = {a.lower() for a in ctx.summary.exclude_artists}
+    if ctx.summary.new_artists:
+        ex_artists |= {a.lower() for a in ctx.profile.artist_weights}
     out = []
     for fc in fused:
         if fc.track_id in banned or fc.track_id not in catalog:

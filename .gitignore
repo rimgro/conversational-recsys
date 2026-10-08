@@ -41,5 +41,6 @@ venv/
 .idea/
 .DS_Store
 
-# полный датасет, скачанный с Google Drive
-/CRS dataset/
+# датасет Music4All-CRS и кэш каталога (docs/dataset.md)
+/music4all_crs/
+/cache/

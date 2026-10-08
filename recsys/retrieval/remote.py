@@ -185,7 +185,7 @@ class BM25APIRetriever(_RemoteRetriever):
 
 class HNSWAPIRetriever(_RemoteRetriever):
     """Текстовый семантический поиск: сервис сам переводит запрос в вектор EmbeddingGemma-2 и ищет в LanceDB.
-    Отправляется последняя реплика пользователя как есть (по-русски): профиль в запросе, по замерам автора, вредит."""
+    Отправляется последняя реплика пользователя как есть: профиль в запросе, по замерам автора, вредит."""
     service = "hnsw"
     path = "/hnsw/search"
     health_path = "/health"

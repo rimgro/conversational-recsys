@@ -24,9 +24,8 @@ from recsys.data.catalog import Catalog
 from recsys.retrieval.bm25 import (BM25Index, artist_token, build_bm25_index, build_lyrics_index,
                                    build_title_index, char_trigrams, country_token, index_words, lang_token,
                                    tag_token, year_token)
-from recsys.ru import STOPWORDS_RU, translit
 from recsys.schemas import Candidate, Context
-from recsys.text import is_cyrillic, tokenize
+from recsys.text import GENERIC_WORDS, STOPWORDS, tokenize
 
 
 class BaseRetriever(ABC):
@@ -134,9 +133,9 @@ class TitleRetriever(BaseRetriever):
 
     @staticmethod
     def query_text(ctx: Context) -> str:
-        """Латиница как есть, кириллица транслитом; служебные русские слова выкидываем."""
+        """Слова последней реплики без служебных («play», «by», «the song»); имена на языке оригинала — как есть."""
         last = ctx.request.user_messages[-1] if ctx.request.user_messages else ""
-        words = [translit(w) if is_cyrillic(w) else w for w in tokenize(last) if w not in STOPWORDS_RU]
+        words = [w for w in tokenize(last) if w not in STOPWORDS and w not in GENERIC_WORDS]
         return " ".join(words + ctx.summary.seed_artists)
 
     def search(self, ctx: Context, top_k: Optional[int] = None) -> List[Candidate]:
@@ -158,13 +157,17 @@ class LyricsRetriever(_BM25Source):
 
     def build_query(self, ctx: Context) -> Dict[str, float]:
         last = ctx.request.user_messages[-1] if ctx.request.user_messages else ""
-        words = [w for w in index_words(last) if not is_cyrillic(w)]
+        words = index_words(last)
         return dict(Counter(words)) if len(words) >= 2 else {}
 
 
 def taste_track_weights(ctx: Context, catalog: Catalog) -> Dict[str, float]:
     """Треки «центра вкуса» с весами: история (вес из профиля) + лайки и треки артистов-сидов
-    (с весом самого тяжёлого трека истории): запрос для audio."""
+    (с весом самого тяжёлого трека истории): запрос для audio. Если в запросе есть образец
+    («like X by Y») — только он: ищем похожее на X, а не на всю историю."""
+    seed_tracks = [t for t in ctx.summary.seed_track_ids if t in catalog]
+    if seed_tracks:
+        return {t: 1.0 for t in seed_tracks}
     weights = {t: w for t, w in ctx.profile.track_weights.items() if t in catalog}
     top = max(weights.values(), default=1.0)
     extra = [t for t in ctx.request.liked_ids if t in catalog]

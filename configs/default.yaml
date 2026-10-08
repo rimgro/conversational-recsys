@@ -3,10 +3,10 @@
 data:
   source: crs                  # crs — Music4All-CRS (docs/dataset.md) | synthetic — без файлов, для тестов кода
   eval_split: test_public      # на каких запросах считать метрики
-  max_positives_per_user: 5    # сколько позитивов (= запросов) брать на пользователя; null = все
+  max_queries_per_user: 5      # сколько запросов брать на пользователя (у одного — до сотен); null = все
   max_tags: 20                 # теги Last.fm с наибольшим весом
   seed: 42
-  cache_dir: data/cache        # кэш каталога crs (parquet + эмбеддинги .npy)
+  cache_dir: cache             # кэш каталога crs (parquet + эмбеддинги .npy)
   use_cache: true
 
   synthetic:
@@ -15,9 +15,9 @@ data:
     seed: 42
 
   crs:
-    dir: CRS dataset           # tracks_meta, train, test_public — целиком (train.parquet) или частями
-    splits: [train, test_public]
-    n_users: 300               # сэмпл пользователей на сплит (полный train ~12.9k); null = все
+    dir: music4all_crs         # tracks_meta, train, test_public, *_queries, *_qrels (docs/dataset.md)
+    splits: [test_public]      # какие сплиты загружать (train — для обучения ранкера)
+    n_users: 300               # сэмпл пользователей на сплит (в test_public 12.2k); null = все
     seed: 42
     with_lyrics: false         # тексты песен в каталог (нужно для поиска по строчке текста)
 
@@ -70,7 +70,7 @@ fusion:
 
 ranker:
   type: stub                   # stub (порядок RRF) | heuristic | api
-  top_k: 10
+  top_k: 20                    # длина выдачи: метрика датасета — nDCG@20
   api_url: null               # для type: api
   api_key: null
   timeout: 2.0                # секунды; при ошибке API -> порядок RRF

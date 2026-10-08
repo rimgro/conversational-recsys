@@ -39,7 +39,7 @@ class Request:
     liked_ids: List[str] = field(default_factory=list)
     skipped_ids: List[str] = field(default_factory=list)
     target_ids: List[str] = field(default_factory=list)   # только для офлайн-оценки
-    meta: Dict[str, Any] = field(default_factory=dict)    # query_family, is_new, split, ...
+    meta: Dict[str, Any] = field(default_factory=dict)    # query_type, is_new, exclude_*, split, ...
 
     @property
     def user_messages(self) -> List[str]:
@@ -64,7 +64,9 @@ class DialogSummary:
     exclude_tags: List[str] = field(default_factory=list)
     seed_artists: List[str] = field(default_factory=list)
     exclude_artists: List[str] = field(default_factory=list)
-    seed_track_ids: List[str] = field(default_factory=list)
+    seed_track_ids: List[str] = field(default_factory=list)  # образец «like X by Y»: ищем похожие на X
+    new_tracks: bool = False             # не предлагать прослушанные треки (similar_to, novelty)
+    new_artists: bool = False            # только артисты, которых нет в истории (novelty)
     mood: Optional[str] = None
     energy: Optional[str] = None         # low | medium | high
     countries: List[str] = field(default_factory=list)   # коды стран артиста: US, GB, ...
@@ -115,7 +117,7 @@ class Context:
     def build(cls, request: Request, summary: DialogSummary, profile: UserProfile,
               exclude_listened: bool = True) -> "Context":
         banned = set(request.shown_ids) | set(request.skipped_ids)
-        if exclude_listened:
+        if exclude_listened or summary.new_tracks:  # similar_to / novelty: цель — новый для пользователя трек
             banned |= profile.listened_ids
         return cls(request, summary, profile, banned)
 

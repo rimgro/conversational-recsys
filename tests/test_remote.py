@@ -72,17 +72,17 @@ def test_pipeline_calls_services(cfg, data, fake_bm25, monkeypatch):
     pipe = Pipeline.from_config(_api_cfg(cfg, url), data.catalog)
     names = {r.name for r in pipe.retrievers}
     assert {"bm25_genres", "bm25_tags", "hnsw", "audio", "relisten"} <= names and "bm25" not in names
-    req = Request(dialog=[Message("user", "спокойный джаз, но не хард-рок")], history=data.requests[0].history,
+    req = Request(dialog=[Message("user", "calm jazz, but not heavy metal")], history=data.requests[0].history,
                   shown_ids=[str(data.catalog.track_ids[0])])
     resp = pipe.run(req, debug=True)
 
     by_index = {b.get("index"): (path, b, h) for path, b, h in calls}
     path, body, headers = by_index["genres"]
-    assert path == "/bm25/search" and "jazz" in body["words"] and "hard" not in body["words"]
+    assert path == "/bm25/search" and "jazz" in body["words"] and "heavy" not in body["words"]
     assert body["exclude_ids"] == [str(data.catalog.track_ids[0])]
     assert headers.get("X-Api-Key") == "k123"
     path, body, headers = by_index[None]  # HNSW: текст реплики как есть, без index, свой ключ
-    assert path == "/hnsw/search" and body["query"] == "спокойный джаз, но не хард-рок" and "index" not in body
+    assert path == "/hnsw/search" and body["query"] == "calm jazz, but not heavy metal" and "index" not in body
     assert body["exclude_ids"] == [str(data.catalog.track_ids[0])] and headers.get("X-Api-Key") == "h456"
     assert len(resp.debug["candidates"]["bm25_tags"]) == 49 and resp.tracks  # tags ответил после повтора
     bm25 = next(r for r in pipe.retrievers if r.name == "bm25_genres")
