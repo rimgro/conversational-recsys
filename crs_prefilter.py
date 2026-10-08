@@ -138,6 +138,12 @@ QUESTION_TEMPLATES = {
     "mood": 'Is the overall mood of this track best described as "{tag}"?',
     "theme": 'Are the lyrics of this track primarily about "{tag}"?',
     "vocal": 'Does this track have "{tag}"?',
+    "genre": 'Is the genre of this track best described as "{tag}"?',
+    "language": 'Are the lyrics of this track in {tag}?',
+    "era": 'Was this track released in the {tag}?',
+    "instrument": 'Does this track prominently feature {tag}?',
+    "energy": 'Is this track best described as "{tag}"?',
+    "_default": 'Does this track have the tag "{tag}"?',
 }
 
 
@@ -288,6 +294,17 @@ class DiffusionTagClassifier(BaseTagger):
         import torch
         from transformers import AutoModelForMaskedLM, AutoTokenizer
 
+        # The dLLM remote `modeling_qwen3.py` reads `decoder_layer.attention_type`,
+        # which transformers 5.19 does not set. For the Qwen3 diffusion checkpoints
+        # all layers are `full_attention`, so expose it on the class.
+        try:
+            from transformers.models.qwen3 import modeling_qwen3 as _q3
+
+            if not hasattr(_q3.Qwen3DecoderLayer, "attention_type"):
+                _q3.Qwen3DecoderLayer.attention_type = "full_attention"
+        except Exception:  # pragma: no cover
+            pass
+
         self.torch = torch
         dtype_map = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}
         kwargs: dict[str, Any] = {"trust_remote_code": True}
@@ -333,7 +350,10 @@ class DiffusionTagClassifier(BaseTagger):
     def classify(self, texts: Sequence[str], tags: Sequence[str], *, batch_size: int = 128) -> "Any":
         import numpy as np
 
-        questions = [QUESTION_TEMPLATES[TAG_GROUP[t]].format(tag=t) for t in tags]
+        questions = [
+            QUESTION_TEMPLATES.get(TAG_GROUP.get(t, "_default"), QUESTION_TEMPLATES["_default"]).format(tag=t)
+            for t in tags
+        ]
         out = np.zeros((len(texts), len(tags)), dtype="float32")
         prompts: list[str] = []
         index: list[tuple[int, int]] = []
