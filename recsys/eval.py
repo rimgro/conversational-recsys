@@ -79,14 +79,49 @@ def evaluate(pipeline: Pipeline, requests: List[Request], k: int = 20, verbose: 
         for src, cands in resp.debug["candidates"].items():
             ids = [c.track_id for c in cands]
             row[f"recall@{src}"] = recall_at_k(ids, req.target_ids, len(ids))
+            # место цели в списке источника (NaN — не нашёл) и сколько кандидатов он отдал
+            row[f"rank:{src}"] = next((c.rank for c in cands if c.track_id in req.target_ids), float("nan"))
+            row[f"n:{src}"] = len(cands)
         if outputs:
             row.update(top=resp.track_ids[:k], response=resp.text)
         rows.append(row)
         if verbose and (i + 1) % 50 == 0:
             print(f"  {i + 1}/{len(reqs)}  {time.time() - t0:.1f} c")
     df = pd.DataFrame(rows)
-    metrics = df.drop(columns=[c for c in ID_COLUMNS + OUTPUT_COLUMNS if c in df]) if len(df) else df
+    metrics = df[[c for c in df.columns if "@" in c]] if len(df) else df
     return df, metrics.mean(numeric_only=True) if len(df) else pd.Series(dtype=float)
+
+
+def sources_summary(per_request: pd.DataFrame) -> pd.DataFrame:
+    """Строка = источник кандидатов. recall — доля запросов, где он нашёл цель; only_this — где цель нашёл
+    только он (уникальный вклад); median_rank / share_top20 — где в его списке цель, когда найдена;
+    mean_candidates / share_empty — сколько кандидатов отдаёт и как часто ничего."""
+    sources = [c.split("@", 1)[1] for c in per_request.columns if c.startswith("recall@") and c != "recall@fused"]
+    found = per_request[[f"recall@{s}" for s in sources]].fillna(0).to_numpy() > 0
+    rows = {}
+    for i, s in enumerate(sources):
+        rank = per_request[f"rank:{s}"]
+        n = per_request[f"n:{s}"]
+        rows[s] = {
+            "recall": found[:, i].mean(),
+            "only_this": (found[:, i] & (found.sum(axis=1) == 1)).mean(),
+            "median_rank": rank.median(),
+            "share_top20": (rank <= 20).sum() / max(int(found[:, i].sum()), 1),
+            "mean_candidates": n.mean(),
+            "share_empty": (n == 0).mean(),
+        }
+    out = pd.DataFrame(rows).T.sort_values("recall", ascending=False)
+    out.loc["fused (все вместе)", "recall"] = per_request["recall@fused"].mean()
+    return out
+
+
+def sources_by(per_request: pd.DataFrame, by: str = "query_type") -> pd.DataFrame:
+    """recall каждого источника по группам: строка = группа (тип запроса), колонка = источник."""
+    cols = [c for c in per_request.columns if c.startswith("recall@")]
+    out = per_request.groupby(by)[cols].mean()
+    out.columns = [c.split("@", 1)[1] for c in cols]
+    out.insert(0, "n", per_request.groupby(by).size())
+    return out
 
 
 def metrics_by(per_request: pd.DataFrame, by: str = "query_type") -> pd.DataFrame:

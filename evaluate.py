@@ -12,6 +12,8 @@
   submission.parquet    сабмит в формате датасета: query_id, top20 (m4a_id по убыванию), response
   by_query_type.csv     метрики по типам запросов
   by_is_new.csv         по новым и уже знакомым трекам
+  by_source.csv         кандгены: recall, уникальный вклад, место цели, сколько кандидатов
+  by_source_query_type.csv  recall каждого кандгена по типам запросов
   per_request.csv       метрики каждого запроса; дописывается по ходу, при обрыве прогона не пропадает
   config.yaml           полный конфиг прогона
 
@@ -33,7 +35,7 @@ import yaml
 
 from recsys.config import load_config
 from recsys.data import load_data
-from recsys.eval import ID_COLUMNS, OUTPUT_COLUMNS, evaluate, metrics_by
+from recsys.eval import OUTPUT_COLUMNS, evaluate, metrics_by, sources_by, sources_summary
 from recsys.pipeline import Pipeline
 
 HERE = Path(__file__).resolve().parent
@@ -144,10 +146,13 @@ def main(argv=None) -> int:
     pd.DataFrame({"query_id": per["request_id"], f"top{a.k}": per["top"], "response": per["response"]}) \
         .to_parquet(run_dir / "submission.parquet", index=False)
     per = per.drop(columns=OUTPUT_COLUMNS)
-    mean = per.drop(columns=ID_COLUMNS).mean(numeric_only=True)
+    mean = per[[c for c in per.columns if "@" in c]].mean(numeric_only=True)
     by_family, by_new = metrics_by(per, "query_type"), metrics_by(per, "is_new")
     by_family.to_csv(run_dir / "by_query_type.csv")
     by_new.to_csv(run_dir / "by_is_new.csv")
+    by_source, source_by_type = sources_summary(per), sources_by(per, "query_type")
+    by_source.to_csv(run_dir / "by_source.csv")
+    source_by_type.to_csv(run_dir / "by_source_query_type.csv")
     errors = {r.name: r.n_errors for r in remote}
     summary = {
         "metrics": {name: round(float(v), 4) for name, v in mean.items()},
@@ -164,6 +169,7 @@ def main(argv=None) -> int:
     main_cols = [c for c in (f"ndcg@{a.k}", f"hit@{a.k}", f"mrr@{a.k}", "recall@fused") if c in mean]
     print("\n" + mean[main_cols].round(3).to_string())
     print("\n" + by_family[["n"] + main_cols].round(3).to_string())
+    print("\nкандгены:\n" + by_source.round(3).to_string())
     if any(errors.values()):
         print(f"\nвнимание: запросы без кандидатов сервиса (ошибка сети или сервиса): {errors}")
     print(f"\nрезультат: {run_dir}")
