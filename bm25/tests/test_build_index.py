@@ -30,7 +30,7 @@ def meta(tmp_path):
 def test_load_items(meta):
     items, stats = build_index.load_items(meta, ['m4a_genres_full'])
     assert dict(zip(items['m4a_id'], items['terms'])) == {
-        'x': ['hard rock,rock'], 'y': ['pop'], 'z': ['']}
+        'x': ['hard rock', 'rock'], 'y': ['pop'], 'z': ['']}
     assert stats == {'n_rows': 5, 'n_dropped_null_ids': 1,
                      'n_dropped_duplicate_ids': 1, 'n_items': 3,
                      'n_empty_docs': 1}
@@ -61,5 +61,17 @@ def test_parquet_shards(tmp_path):
     df.iloc[2:].to_parquet(shards / 'tracks_meta-00001-of-00002.parquet')
     items, stats = build_index.load_items(shards, ['m4a_genres_full'])
     assert dict(zip(items['m4a_id'], items['terms'])) == {
-        'x': ['hard rock,rock'], 'y': ['pop'], 'z': ['']}
+        'x': ['hard rock', 'rock'], 'y': ['pop'], 'z': ['']}
     assert stats['n_dropped_duplicate_ids'] == 1
+
+
+def test_comma_separated_words_are_searchable(tmp_path):
+    """tracks_meta хранит жанры одной строкой через запятую: слово после запятой тоже ищется."""
+    import pandas as pd
+    from bm25 import infer_bm25
+    src = tmp_path / 'tracks_meta.parquet'
+    pd.DataFrame({'m4a_id': ['a', 'b'], 'm4a_genres_full': ['hard rock,melodic hard rock', 'pop']}).to_parquet(src)
+    items, _ = build_index.load_items(src, ['m4a_genres_full'])
+    model = build_index.train_bm25(items.rename(columns={'terms': 'g'}), feature_col='g', id_col='m4a_id')
+    assert list(infer_bm25(model, 'melodic', top_k=5)) == ['a']
+    assert not any(',' in word for word in model['vocab'])
