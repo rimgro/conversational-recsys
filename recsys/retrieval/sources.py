@@ -280,7 +280,13 @@ def build_retrievers(cfg: Dict[str, Any], catalog: Catalog,
             out.append(BM25APIRetriever(name, catalog, CandgenClient.from_config(cfg, "bm25", c), index=c.get("index", "genres"),
                                         top_k=k, query=c.get("query", "tags")))
         elif kind == "hnsw_api":
-            out.append(HNSWAPIRetriever(name, catalog, CandgenClient.from_config(cfg, "hnsw", c), top_k=k))
+            hcfg = cfg.get("candgen", {}).get("hnsw", {})
+            embedder = None
+            if hcfg.get("embed", "local") == "local":
+                from recsys.retrieval.query_embedder import GemmaQueryEmbedder
+                embedder = GemmaQueryEmbedder(**hcfg.get("embedder", {}))
+            out.append(HNSWAPIRetriever(name, catalog, CandgenClient.from_config(cfg, "hnsw", c), top_k=k,
+                                        embedder=embedder))
         elif kind == "bm25":
             out.append(BM25Retriever(catalog, bm25_index, top_k=k))
         elif kind == "history":

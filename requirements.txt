@@ -8,3 +8,5 @@ pytest>=7
 # transformers>=4.44
 # accelerate>=0.33
 # bitsandbytes   # только если load_in_4bit: true
+# вектор запроса для HNSW у нас (candgen.hnsw.embed: local), на GPU DataSphere; модель закрытая — нужен HF_TOKEN
+# sentence-transformers>=6.1   # как в релизе hnsw-v1

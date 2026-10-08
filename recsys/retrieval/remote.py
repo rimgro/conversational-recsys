@@ -5,7 +5,8 @@
 пустой список, предупреждение и last_error (пайплайн не падает, остальные источники работают).
 
   bm25_api   POST /bm25/search  слова из саммари -> индекс genres / tags / title     (candgen.bm25)
-  hnsw_api   POST /hnsw/search  текст последней реплики как есть -> EmbeddingGemma + LanceDB (candgen.hnsw)
+  hnsw_api   POST /hnsw/search  вектор последней реплики (EmbeddingGemma, строим сами) -> LanceDB  (candgen.hnsw);
+                                если вектор построить не вышло — текст, и сервис строит его сам
 
 Конфиг: раздел candgen (timeout, retries; bm25 / hnsw: url, api_key) + источники с type: bm25_api | hnsw_api.
 Значения вида ${VAR} и ${VAR:-по умолчанию} берутся из переменных окружения (и файла .env).
@@ -184,17 +185,31 @@ class BM25APIRetriever(_RemoteRetriever):
 
 
 class HNSWAPIRetriever(_RemoteRetriever):
-    """Текстовый семантический поиск: сервис сам переводит запрос в вектор EmbeddingGemma-2 и ищет в LanceDB.
-    Отправляется последняя реплика пользователя как есть: профиль в запросе, по замерам автора, вредит."""
+    """Текстовый семантический поиск в LanceDB по последней реплике пользователя (профиль, по замерам автора, вредит).
+    embedder задан (candgen.hnsw.embed: local) — вектор EmbeddingGemma-2 строим сами и отправляем vector;
+    иначе или если модель не загрузилась — отправляем текст, вектор строит сервис (на CPU, медленнее)."""
     service = "hnsw"
     path = "/hnsw/search"
     health_path = "/health"
     MAX_CHARS = 8192
 
+    def __init__(self, name: str, catalog: Catalog, client: CandgenClient, top_k: int = 200, embedder: Any = None):
+        super().__init__(name, catalog, client, top_k=top_k)
+        self.embedder = embedder
+        self.embed_error: Optional[str] = None
+
     def payload(self, ctx: Context, k: int) -> Optional[Dict[str, Any]]:
         messages = ctx.request.user_messages
-        text = messages[-1].strip() if messages else ""
-        return {"query": text[:self.MAX_CHARS], "k": k} if text else None
+        text = messages[-1].strip()[:self.MAX_CHARS] if messages else ""
+        if not text:
+            return None
+        if self.embedder is not None and self.embed_error is None:
+            try:
+                return {"vector": self.embedder.encode(text), "k": k}
+            except Exception as e:  # нет sentence-transformers / GPU / доступа к модели
+                self.embed_error = f"{type(e).__name__}: {e}"
+                warnings.warn(f"{self.name}: вектор запроса не построен, отправляем текст ({self.embed_error})")
+        return {"query": text, "k": k}
 
     def health(self) -> Dict[str, Any]:
         try:

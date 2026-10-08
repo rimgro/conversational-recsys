@@ -48,6 +48,12 @@ candgen:                       # сервисы-кандгены по HTTP (API:
   hnsw:
     url: ${HNSW_URL}           # текстовый семантический поиск (релиз hnsw-v1)
     api_key: ${HNSW_API_KEY}
+    embed: local               # local — вектор запроса строим сами (GPU DataSphere) и шлём vector;
+                               # server — шлём текст, вектор строит сервис на CPU. Без модели local -> текст
+    embedder:                  # recsys/retrieval/query_embedder.py; нужны sentence-transformers и HF_TOKEN
+      model_name: google/embeddinggemma-2
+      device: null             # null — сама выберет (cuda, если есть)
+      dtype: null              # float16 на GPU быстрее
 
 retrieval:                     # enabled: false выключает источник; type по умолчанию = имя (recsys/retrieval/sources.py)
   bm25:     {enabled: true, top_k: 200, k1: 1.2, b: 0.75}

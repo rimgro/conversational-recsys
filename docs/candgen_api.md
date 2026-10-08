@@ -46,7 +46,9 @@
 | `k` | 1..1000, по умолчанию 20 | сколько треков вернуть |
 | `exclude_ids` | список строк, до 100 000 | не возвращать эти треки |
 
-Поля `index` нет (одна таблица); незнакомое поле — 422. Наш клиент отправляет последнюю реплику пользователя.
+Поля `index` нет (одна таблица); незнакомое поле — 422. Наш клиент строит вектор последней реплики сам
+(`recsys/retrieval/query_embedder.py`, тот же рецепт: `task: search result | query: <текст>` → EmbeddingGemma-2 → L2)
+и отправляет `vector`; если модель не загрузилась (`candgen.hnsw.embed: server` или нет sentence-transformers) — `query`.
 
 Ответ: `{"ids": [...], "scores": [...], "items": [{"id", "title", "artist", "album", "year", "lang", "genres", "tags", "score"}],
 "model", "release", "elapsed_ms"}`; `scores` — косинусная близость, по убыванию. При `k=200` — около 0.5 с и 117 КБ.

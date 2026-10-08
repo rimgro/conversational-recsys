@@ -18,7 +18,7 @@ OVERLAY = os.path.join(ROOT, "configs", "candgen.yaml")
 
 def _api_cfg(cfg, url, **extra):
     base = load_config([os.path.join(ROOT, "configs", "default.yaml"), OVERLAY], {"data": cfg["data"]})
-    return deep_update(base, {"candgen": {"bm25": {"url": url}, "hnsw": {"url": url}, **extra}})
+    return deep_update(base, {"candgen": {"bm25": {"url": url}, "hnsw": {"url": url, "embed": "server"}, **extra}})
 
 
 def _free_port():
@@ -131,3 +131,35 @@ def test_load_env(tmp_path, monkeypatch):
     load_env(str(env))
     assert os.environ["RECSYS_T1"] == "abc" and os.environ["RECSYS_T2"] == "уже задано"
     monkeypatch.delenv("RECSYS_T1")
+
+
+def test_hnsw_sends_vector_built_locally(cfg, data, fake_bm25):
+    """embed: local — в HNSW уходит вектор (по рецепту сервиса), а не текст; модель не загрузилась — текст."""
+    from recsys.retrieval.query_embedder import query_text
+    url, calls = fake_bm25
+
+    class FakeEmbedder:
+        def __init__(self, fail=False):
+            self.fail, self.texts = fail, []
+
+        def encode(self, text):
+            if self.fail:
+                raise ImportError("No module named 'sentence_transformers'")
+            self.texts.append(text)
+            return [0.0] * 767 + [1.0]
+
+    pipe = Pipeline.from_config(_api_cfg(cfg, url), data.catalog)
+    hnsw = next(r for r in pipe.retrievers if r.name == "hnsw")
+    hnsw.embedder = FakeEmbedder()
+    req = Request(dialog=[Message("user", "calm  jazz\nfor   night")], history=data.requests[0].history)
+    pipe.run(req)
+    body = next(b for p, b, h in calls if p == "/hnsw/search")
+    assert len(body["vector"]) == 768 and "query" not in body and hnsw.embedder.texts == ["calm  jazz\nfor   night"]
+    assert query_text("calm  jazz\nfor   night") == "task: search result | query: calm jazz for night"
+
+    calls.clear()
+    hnsw.embedder = FakeEmbedder(fail=True)
+    with pytest.warns(UserWarning, match="вектор запроса не построен"):
+        pipe.run(req)
+    body = next(b for p, b, h in calls if p == "/hnsw/search")
+    assert body["query"] == "calm  jazz\nfor   night" and "vector" not in body and hnsw.embed_error
