@@ -265,13 +265,13 @@ class RuleSummarizer(BaseSummarizer):
         last = request.user_messages[-1] if request.user_messages else ""
         # similar_to: «like X by Y but from other artists» — X образец (похожие по звучанию), Y исключается
         ref_track, ref_artist, ref_words = self._reference(last)
-        if ref_artist:
-            seeds = [a for a in seeds if a != ref_artist]
+        if ref_artist:  # артист образца и «артисты» из слов названия («like focus by ...» — не группа Focus)
+            seeds = [a for a in seeds if a != ref_artist and not set(tokenize(a)) <= ref_words]
             exclude_artists.append(ref_artist)
         elif _OTHER_ARTISTS_RE.search(last):  # «like Y but other artists»: Y — образец, а не ответ
             exclude_artists += seeds
         # в поисковый запрос идут теги, артисты и латинские слова (каталог англоязычный)
-        query_words = [w for w in content_tokens(last)
+        query_words = [w for w in content_tokens(_INSTRUMENTAL_RE.sub("instrumental", last))
                        if not is_cyrillic(w) and w not in GENERIC_WORDS and w not in NEGATIONS]
         excluded_words = {w for t in exclude for w in t.split()} | ref_words
         query_words = [w for w in query_words if w not in excluded_words]
