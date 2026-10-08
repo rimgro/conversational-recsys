@@ -172,7 +172,7 @@ class BM25APIRetriever(_RemoteRetriever):
             words = TitleRetriever.query_text(ctx).split()
         else:
             words = [w for t in s.include_tags for w in index_words(t)] + index_words(s.query)
-            # слова исключённых тегов убираем, если они не входят в желаемые ('рок, но не хард-рок')
+            # слова исключённых тегов убираем, если они не входят в желаемые ('rock, but not hard rock')
             wanted = {w for t in s.include_tags for w in index_words(t)}
             banned = {w for t in s.exclude_tags for w in index_words(t)} - wanted
             words = [w for w in words if w not in banned]

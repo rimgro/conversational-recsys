@@ -22,7 +22,7 @@ data:
     with_lyrics: false         # тексты песен в каталог (нужно для поиска по строчке текста)
 
 llm:
-  type: stub                   # stub | local
+  type: stub                   # stub | local | gemma_service (сервис в DataSphere)
   model_name: Qwen/Qwen2.5-1.5B-Instruct   # для качества: Qwen/Qwen2.5-7B-Instruct
   max_new_tokens: 512
   temperature: 0.0
@@ -30,6 +30,10 @@ llm:
   torch_dtype: auto
   load_in_4bit: false
   stub_response: ""           # что отвечает StubLLM (пусто -> правила/шаблон)
+  gemma_service:               # для type: gemma_service — функция prompt -> ответ из модуля проекта DataSphere
+    path: /home/jupyter/project/llm_gemma_service
+    module: gemma_service
+    function: measure_request
 
 summarizer:
   type: rule                   # rule (заглушка) | llm (фолбэк на rule)

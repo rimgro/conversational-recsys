@@ -1,12 +1,16 @@
 """LLM, общая для саммари (шаг 1) и описания (шаг 5).
 
-stub  -> StubLLM, ничего не загружает (саммари и описание падают на правила/шаблон)
-local -> LocalLLM, открытая модель через transformers на GPU DataSphere
+stub           -> StubLLM, ничего не загружает (саммари и описание падают на правила/шаблон)
+local          -> LocalLLM, открытая модель через transformers на GPU DataSphere
+gemma_service  -> GemmaServiceLLM, готовый сервис в DataSphere: функция prompt -> ответ из модуля проекта
+                  (по умолчанию gemma_service.measure_request из /home/jupyter/project/llm_gemma_service)
 """
 from __future__ import annotations
 
+import importlib
 import json
 import re
+import sys
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Union
 
@@ -78,6 +82,45 @@ class LocalLLM(BaseLLM):
         return self._tok.decode(out[0, ids.shape[1]:], skip_special_tokens=True).strip()
 
 
+class GemmaServiceLLM(BaseLLM):
+    """LLM-сервис DataSphere: function(prompt) из модуля module в папке path. Модуль импортируется при первом
+    вызове, поэтому локально (модуля нет) пайплайн работает: ошибка импорта -> шаг падает на шаблон/правила."""
+
+    TEXT_KEYS = ("text", "response", "answer", "output", "content", "generated_text", "result")
+
+    def __init__(self, path: str, module: str = "gemma_service", function: str = "measure_request"):
+        self.path, self.module, self.function = path, module, function
+        self._fn = None
+
+    def _load(self):
+        if self._fn is None:
+            if self.path and self.path not in sys.path:
+                sys.path.insert(0, self.path)
+            self._fn = getattr(importlib.import_module(self.module), self.function)
+        return self._fn
+
+    @classmethod
+    def _text(cls, result: Any) -> str:
+        """Ответ сервиса -> текст: строка как есть; из словаря — поле text / response / answer / ...;
+        из кортежа или списка — первая строка (например, (текст, время))."""
+        if isinstance(result, str):
+            return result
+        if isinstance(result, dict):
+            for key in cls.TEXT_KEYS:
+                if isinstance(result.get(key), str):
+                    return result[key]
+        if isinstance(result, (list, tuple)):
+            for item in result:
+                text = cls._text(item)
+                if text:
+                    return text
+        return ""
+
+    def generate(self, messages, max_new_tokens=None) -> str:
+        prompt = messages if isinstance(messages, str) else "\n\n".join(m["content"] for m in messages)
+        return self._text(self._load()(prompt)).strip()
+
+
 def build_llm(cfg: Dict[str, Any]) -> BaseLLM:
     lcfg = cfg.get("llm", {})
     kind = lcfg.get("type", "stub")
@@ -92,6 +135,10 @@ def build_llm(cfg: Dict[str, Any]) -> BaseLLM:
             torch_dtype=lcfg.get("torch_dtype", "auto"),
             load_in_4bit=lcfg.get("load_in_4bit", False),
         )
+    if kind == "gemma_service":
+        g = lcfg.get("gemma_service", {})
+        return GemmaServiceLLM(g.get("path", ""), module=g.get("module", "gemma_service"),
+                               function=g.get("function", "measure_request"))
     raise ValueError(f"Неизвестный llm.type: {kind}")
 
 

@@ -27,7 +27,9 @@ jupyter lab inference.ipynb   # или открыть в DataSphere
 Данные — Music4All-CRS в папке `music4all_crs/` (`data.crs.dir`, в git не хранится): `tracks_meta.parquet`,
 `train.parquet` / `test_public.parquet` (пользователи), `*_queries.parquet` (запросы), `*_qrels.parquet` (ответы).
 Синтетика в формате датасета (`data.source: synthetic`) нужна только тестам: они не зависят от файлов.
-В DataSphere: открыть ноутбук из корня репозитория; для LLM нужна GPU-конфигурация и `transformers`.
+В DataSphere: открыть ноутбук из корня репозитория. Описание выдачи от LLM-сервиса проекта — `USE_LLM_SERVICE = True`
+в `inference.ipynb` (`llm.type: gemma_service`, функция `gemma_service.measure_request`, путь в `configs/default.yaml`);
+локально сервиса нет, и ответ пишет шаблон. Своя модель в ноутбуке — `llm.type: local` (GPU и `transformers`).
 
 ## Сервисы-кандгены
 

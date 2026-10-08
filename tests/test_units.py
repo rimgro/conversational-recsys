@@ -120,3 +120,22 @@ def test_profile_numbers_are_not_tastes(data):
                             "Song languages: en 99%.")
     out = RuleSummarizer(data.catalog).summarize(req)
     assert out.user_tags == ["folk", "metal"]
+
+
+def test_gemma_service_llm(tmp_path, cfg, data):
+    """Сервис DataSphere подменяем модулем во временной папке; без модуля описание падает на шаблон."""
+    from recsys.config import deep_update
+    from recsys.explain import LLMExplainer
+    from recsys.llm import GemmaServiceLLM
+    from recsys.pipeline import Pipeline
+    (tmp_path / "fake_gemma.py").write_text(
+        "def measure_request(prompt):\n    return {'response': ' Enjoy! ' + prompt[-1], 'latency': 0.1}\n",
+        encoding="utf8")
+    llm = GemmaServiceLLM(str(tmp_path), module="fake_gemma")
+    assert llm.generate([{"role": "system", "content": "a"}, {"role": "user", "content": "b"}]) == "Enjoy! b"
+    assert GemmaServiceLLM._text(("text", 0.2)) == "text" and GemmaServiceLLM._text(None) == ""
+    c = deep_update(cfg, {"explainer": {"type": "llm"}})
+    pipe = Pipeline.from_config(c, data.catalog, llm=llm)
+    assert isinstance(pipe.explainer, LLMExplainer) and pipe.run(data.requests[0]).text.startswith("Enjoy!")
+    missing = GemmaServiceLLM(str(tmp_path), module="no_such_service")
+    assert Pipeline.from_config(c, data.catalog, llm=missing).run(data.requests[0]).text.startswith("Hi!")
