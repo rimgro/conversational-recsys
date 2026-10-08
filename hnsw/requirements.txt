@@ -1,6 +1,0 @@
-numpy
-pandas
-pyarrow
-fastapi
-uvicorn
-pydantic>=2

@@ -1,7 +1,0 @@
-numpy
-scipy
-pandas
-pyarrow
-fastapi
-uvicorn
-pydantic>=2
