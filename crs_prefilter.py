@@ -316,6 +316,12 @@ class DiffusionTagClassifier(BaseTagger):
         if device:
             self.model = self.model.to(device)
         self.model.eval()
+        # Compute the LM head only at the answer position: use the base backbone and
+        # apply lm_head to the last hidden state (avoids B x T x vocab logits -> OOM).
+        self._base = getattr(self.model, "model", None)
+        self._lm_head = getattr(self.model, "lm_head", None)
+        if self._base is None or self._lm_head is None:
+            self._base = None
         self.device = device
         self.max_length = max_length
         self.enable_thinking = enable_thinking
@@ -390,7 +396,12 @@ class DiffusionTagClassifier(BaseTagger):
             input_ids = input_ids.to(self.device)
             attention = attention.to(self.device)
         with self.torch.no_grad():
-            logits = self.model(input_ids=input_ids, attention_mask=attention).logits[:, -1, :]
+            if self._base is not None:
+                out = self._base(input_ids=input_ids, attention_mask=attention)
+                hidden = out.last_hidden_state if hasattr(out, "last_hidden_state") else out[0]
+                logits = self._lm_head(hidden[:, -1, :])
+            else:
+                logits = self.model(input_ids=input_ids, attention_mask=attention).logits[:, -1, :]
         yes = logits[:, self.yes_id].float()
         no = logits[:, self.no_id].float()
         probs = self.torch.softmax(self.torch.stack([yes, no], dim=1), dim=1)[:, 0]

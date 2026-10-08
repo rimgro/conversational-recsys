@@ -51,6 +51,7 @@ def main() -> int:
     p.add_argument("--max-queries", type=int, default=5000)
     p.add_argument("--query-batch", type=int, default=64)
     p.add_argument("--tag-batch", type=int, default=128)
+    p.add_argument("--max-length", type=int, default=384)
     p.add_argument("--limit-tracks", type=int, default=None)
     p.add_argument("--approaches", default="vector,tags,hybrid")
     args = p.parse_args()
@@ -88,7 +89,7 @@ def main() -> int:
                 tags_by_id[o["m4a_id"]] = o["extracted_tags"]
     else:
         if args.tagger == "diffusion":
-            tagger = pre.DiffusionTagClassifier(args.tag_model, device=args.device, dtype=args.dtype)
+            tagger = pre.DiffusionTagClassifier(args.tag_model, device=args.device, dtype=args.dtype, max_length=args.max_length)
         else:
             tagger = pre.LexiconTagger()
         tags_by_id = pre.extract_track_tags(
@@ -125,7 +126,7 @@ def main() -> int:
     embedder = gemma.GemmaEmbedder(device=args.device, dtype=args.dtype)
     metadata_df = pre.load_metadata(table)
     if args.tagger == "diffusion":
-        query_tagger = pre.DiffusionTagClassifier(args.tag_model, device=args.device, dtype=args.dtype)
+        query_tagger = pre.DiffusionTagClassifier(args.tag_model, device=args.device, dtype=args.dtype, max_length=args.max_length)
     else:
         query_tagger = pre.LexiconTagger()
 
