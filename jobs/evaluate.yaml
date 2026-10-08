@@ -6,12 +6,12 @@
 # Перед запуском:
 #   * data/crs/ — части датасета: tracks_meta-*.parquet и test_public-*.parquet (train не нужен);
 #     папка загружается в задание целиком.
-#   * секреты проекта BM25_URL, BM25_API_KEY — секреты DataSphere передаются заданию как переменные
-#     окружения. Без сервера BM25: убрать --candgen из cmd.
+#   * секреты проекта BM25_URL, BM25_API_KEY, HNSW_URL, HNSW_API_KEY — секреты DataSphere передаются заданию
+#     как переменные окружения. Без сервисов: убрать --candgen из cmd.
 # Результат (metrics.json, by_query_family.csv, ...) скачивается в eval_result/ после выполнения.
 # Быстрая проверка — --n-users 300 вместо all.
 name: recsys-evaluate
-desc: Метрики пайплайна на test_public (BM25 с сервера)
+desc: Метрики пайплайна на test_public (BM25 и HNSW с сервера)
 
 cmd: >
   python3 evaluate.py --candgen --split test_public --n-users all

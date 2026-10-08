@@ -1,7 +1,7 @@
 # Пути относительные: ноутбук запускается из корня репозитория.
 
 data:
-  source: synthetic            # synthetic (работает сразу) | crs (Music4All-CRS, docs/dataset.md)
+  source: crs                  # crs — Music4All-CRS (docs/dataset.md) | synthetic — без файлов, для тестов кода
   eval_split: test_public      # на каких запросах считать метрики
   max_positives_per_user: 5    # сколько позитивов (= запросов) брать на пользователя; null = все
   max_tags: 20                 # теги Last.fm с наибольшим весом
@@ -15,7 +15,7 @@ data:
     seed: 42
 
   crs:
-    dir: data                  # tracks_meta.parquet, train.parquet, test_public.parquet
+    dir: CRS dataset           # tracks_meta, train, test_public — целиком (train.parquet) или частями
     splits: [train, test_public]
     n_users: 300               # сэмпл пользователей на сплит (полный train ~12.9k); null = все
     seed: 42
@@ -41,6 +41,9 @@ candgen:                       # сервисы-кандгены по HTTP (API:
   bm25:
     url: ${BM25_URL}           # адрес сервера BM25 (.env или секрет DataSphere)
     api_key: ${BM25_API_KEY}   # заголовок X-API-Key; пусто = без ключа
+  hnsw:
+    url: ${HNSW_URL}           # текстовый семантический поиск (релиз hnsw-v1)
+    api_key: ${HNSW_API_KEY}
 
 retrieval:                     # enabled: false выключает источник; type по умолчанию = имя (recsys/retrieval/sources.py)
   bm25:     {enabled: true, top_k: 200, k1: 1.2, b: 0.75}
@@ -50,17 +53,18 @@ retrieval:                     # enabled: false выключает источн�
   history:  {enabled: true, top_k: 200, n_tags: 15, n_artists: 5}
   audio:    {enabled: true, top_k: 200}                        # эмбеддинги MuQ
   popular:  {enabled: true, top_k: 100}
-  # BM25 с сервера (recsys/retrieval/remote.py), адрес в candgen.bm25
+  # сервисы на сервере (recsys/retrieval/remote.py), адреса в candgen.bm25 / candgen.hnsw
   bm25_genres: {enabled: false, type: bm25_api, index: genres, query: tags, top_k: 200}
   bm25_tags:   {enabled: false, type: bm25_api, index: tags, query: tags, top_k: 200}
   bm25_title:  {enabled: false, type: bm25_api, index: title, query: title, top_k: 50}
+  hnsw:        {enabled: false, type: hnsw_api, top_k: 200}       # запрос как есть -> EmbeddingGemma + LanceDB
 
 fusion:
   rrf_k: 60
   top_n: 500                   # сколько отдаём в ранкер
   exclude_listened: false      # 93% целей в датасете — повторные прослушивания, их нельзя выкидывать
   weights: {bm25: 1.0, relisten: 1.0, title: 1.5, lyrics: 1.5, history: 0.5, audio: 0.5, popular: 0.2,
-            bm25_genres: 0.7, bm25_tags: 0.7, bm25_title: 1.0}
+            bm25_genres: 0.7, bm25_tags: 0.7, bm25_title: 1.0, hnsw: 1.0}
   no_query_boost: {relisten: 1.5, history: 2.0, audio: 1.5, popular: 1.5}   # запрос пустой («ещё»)
   cold_start_boost: {popular: 2.0}                                         # истории нет
 

@@ -10,7 +10,7 @@
 |---|---|
 | `inference.ipynb` | запрос пользователя → ответ и треки; следующая реплика |
 | `experiments.ipynb` | почему такая выдача: разбор запроса по шагам, как правила понимают настоящие запросы, сравнение вариантов конфига, LLM |
-| `examples/candgen.ipynb` | проверка сервиса BM25 руками: какие запросы и что он отвечает |
+| `examples/candgen.ipynb` | проверка сервисов BM25 и HNSW руками: какие запросы и что они отвечают |
 
 ## Запуск
 
@@ -20,12 +20,12 @@ pytest -q                 # тесты, пайплайн целиком на с�
 jupyter lab inference.ipynb   # или открыть в DataSphere
 ```
 
-С BM25 на сервере: задать `BM25_URL` и `BM25_API_KEY` (файл `.env` в корне — он не в git — или секреты
-DataSphere) и поставить в ноутбуке `USE_CANDGEN = True`.
+С сервисами на сервере: задать `BM25_URL`, `BM25_API_KEY`, `HNSW_URL`, `HNSW_API_KEY` (файл `.env` в корне — он не в git —
+или секреты DataSphere) и поставить в ноутбуке `USE_CANDGEN = True`.
 
-Без данных всё работает на синтетике в формате датасета (`data.source: synthetic`). Настоящие данные:
-`tracks_meta`, `train`, `test_public` — целиком (`train.parquet`) или частями (`train-00000-of-00078.parquet`, так
-выложен полный датасет) в одной папке, например `data/full/`; в ноутбуке `DATA = "crs"`, `DATA_DIR = "data/full"`.
+Данные по умолчанию — Music4All-CRS в папке `CRS dataset/` (`data.crs.dir`): `tracks_meta`, `train`, `test_public`
+целиком (`train.parquet`) или частями (`train-00000-of-00082.parquet`, так выложен полный датасет).
+Синтетика в формате датасета (`data.source: synthetic`) нужна только тестам: они не зависят от файлов.
 В DataSphere: открыть ноутбук из корня репозитория; для LLM нужна GPU-конфигурация и `transformers`.
 
 ## Сервисы-кандгены
@@ -37,10 +37,11 @@ DataSphere) и поставить в ноутбуке `USE_CANDGEN = True`.
 |---|---|---|
 | `dev/bm25` | сервис BM25 (`POST /bm25/search`, индексы genres, tags, title) | развёрнут на сервере |
 | `fix/bm25-comma-split` | исправление сборки индексов BM25 (жанры через запятую) | ждёт слияния в `dev/bm25` |
-| `dev/hnsw` | текстовый семантический поиск (EmbeddingGemma + LanceDB) | не развёрнут |
+| `dev/hnsw`, релиз `hnsw-v1` | текстовый семантический поиск (EmbeddingGemma + LanceDB, `POST /hnsw/search`) | развёрнут на сервере |
 | `dev-ranker` | ранкер LightGBM | в разработке |
 
-- `configs/candgen.yaml` включает источники `bm25_genres`, `bm25_tags` с сервера вместо локального `bm25`.
+- `configs/candgen.yaml` включает источники `bm25_genres`, `bm25_tags` и `hnsw` с сервера вместо локального `bm25`.
+  Адреса и ключи — `BM25_URL`, `BM25_API_KEY`, `HNSW_URL`, `HNSW_API_KEY` (файл `.env` или секреты DataSphere).
   Без неё всё считается локально, так что ноутбуки работают и без сервера.
 - Если сервис недоступен, его источники возвращают пустой список с предупреждением, остальные работают.
 
@@ -52,7 +53,7 @@ DataSphere) и поставить в ноутбуке `USE_CANDGEN = True`.
 
 ```bash
 python evaluate.py --data-dir "CRS dataset" --n-users 1000              # быстро, ~3 мин
-python evaluate.py --data-dir "CRS dataset" --n-users all --candgen     # весь сплит, BM25 с сервера
+python evaluate.py --data-dir "CRS dataset" --n-users all --candgen     # весь сплит, BM25 и HNSW с сервера
 python evaluate.py --data-dir "CRS dataset" --set ranker.type=heuristic # любой параметр конфига
 ```
 
@@ -94,6 +95,7 @@ python evaluate.py --data-dir "CRS dataset" --set ranker.type=heuristic # люб
 | `audio` | эмбеддинги MuQ, ближайшие к центру вкуса | discovery, audio_attributes |
 | `popular` | популярное в жанрах пользователя | холодный старт |
 | `bm25_genres`, `bm25_tags`, `bm25_title` | BM25 с сервера (`type: bm25_api`); `bm25_title` ждёт индекса title | как `bm25` / `title` |
+| `hnsw` | текстовый семантический поиск с сервера по реплике как есть (`type: hnsw_api`) | exact, lyrics_recall, vague_recall |
 
 Контракты между шагами: `recsys/schemas.py` (`Request`, `DialogSummary`, `Candidate`, `FusedCandidate`, `RankedTrack`, `Response`).
 
@@ -105,10 +107,10 @@ evaluate.py                валидация: метрики на test_public -
 jobs/evaluate.yaml         то же в DataSphere Jobs
 experiments.ipynb          эксперименты: разбор по шагам, сравнение вариантов
 configs/default.yaml       все параметры и переключатели
-configs/candgen.yaml       надстройка: BM25 с сервера по HTTP
+configs/candgen.yaml       надстройка: BM25 и HNSW с сервера по HTTP
 docs/dataset.md            описание датасета
 docs/candgen_api.md        API сервисов-кандгенов (контракт с нашей частью)
-examples/candgen.ipynb     проверка BM25 руками
+examples/candgen.ipynb     проверка BM25 и HNSW руками
 recsys/
   schemas.py      контракты между шагами
   config.py       загрузка YAML + overrides (предупреждает об опечатках в ключах)
@@ -120,7 +122,7 @@ recsys/
   retrieval/
     bm25.py       BM25-индексы: теги, триграммы названий, тексты песен
     sources.py    шаг 2: локальные источники кандидатов
-    remote.py     шаг 2: источники с сервера по HTTP (bm25_api)
+    remote.py     шаг 2: источники с сервера по HTTP (bm25_api, hnsw_api)
   fusion.py       шаг 3: RRF, фильтры, веса источников
   ranking.py      шаг 4: признаки, StubRanker, HeuristicRanker, APIRanker
   explain.py      шаг 5: StubExplainer, LLMExplainer (ответ по-русски)

@@ -29,6 +29,6 @@ def test_evaluate_stops_when_candgen_down(tmp_path):
         s.bind(("127.0.0.1", 0))
         url = f"http://127.0.0.1:{s.getsockname()[1]}"  # никто не слушает
     code = evaluate.main(["--synthetic", "--n-users", "5", "--candgen", "--run-dir", str(tmp_path / "run"),
-                          "--set", f"candgen.bm25.url={url}",
+                          "--set", f"candgen.bm25.url={url}", "--set", f"candgen.hnsw.url={url}",
                           "--set", "candgen.timeout=0.5"])
     assert code == 2 and not (tmp_path / "run").exists()

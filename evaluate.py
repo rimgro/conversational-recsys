@@ -13,9 +13,9 @@
   per_request.csv       метрики каждого запроса; дописывается по ходу, при обрыве прогона не пропадает
   config.yaml           полный конфиг прогона
 
-С --candgen (BM25 с сервера) перед стартом проверяется /health: если сервис недоступен, прогон не начинается,
-чтобы метрики не посчитались молча без его кандидатов. Адрес и ключ — BM25_URL, BM25_API_KEY
-(из окружения или файла .env).
+С --candgen (BM25 и HNSW с сервера) перед стартом проверяется /health: если сервис недоступен, прогон не начинается,
+чтобы метрики не посчитались молча без его кандидатов. Адреса и ключи — BM25_URL, BM25_API_KEY, HNSW_URL,
+HNSW_API_KEY (из окружения или файла .env).
 Полный прогон в облаке без открытого ноутбука: jobs/evaluate.yaml (DataSphere Jobs).
 """
 import argparse
@@ -93,7 +93,7 @@ def main(argv=None) -> int:
     p.add_argument("--synthetic", action="store_true", help="синтетика вместо датасета")
     p.add_argument("--n-users", help="сколько пользователей взять из сплита; all — все (по умолчанию из конфига)")
     p.add_argument("--max-positives", help="запросов на пользователя; all — все (по умолчанию из конфига)")
-    p.add_argument("--candgen", action="store_true", help="BM25 с сервера по HTTP (configs/candgen.yaml)")
+    p.add_argument("--candgen", action="store_true", help="BM25 и HNSW с сервера по HTTP (configs/candgen.yaml)")
     p.add_argument("--config", action="append", default=[], help="ещё YAML поверх (можно несколько)")
     p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                    help="параметр конфига, например ranker.type=heuristic (можно несколько)")
@@ -118,7 +118,7 @@ def main(argv=None) -> int:
     for name, h in health.items():
         print(f"[candgen] {name}: {h}")
     if down:
-        print(f"сервисы недоступны: {sorted(down)}; проверьте BM25_URL и BM25_API_KEY", file=sys.stderr)
+        print(f"сервисы недоступны: {sorted(down)}; проверьте адреса и ключи в .env (BM25_URL, HNSW_URL, ...)", file=sys.stderr)
         return 2
 
     run_dir = Path(a.run_dir or Path(a.out) / f"{started:%Y%m%d_%H%M%S}_{a.split}")

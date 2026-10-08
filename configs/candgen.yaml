@@ -1,6 +1,6 @@
-# Надстройка над default.yaml: BM25 берётся с сервера по HTTP вместо локального.
+# Надстройка над default.yaml: BM25 и текстовый HNSW берутся с сервера по HTTP.
 #   cfg = load_config(["configs/default.yaml", "configs/candgen.yaml"])
-# Адрес и ключ — BM25_URL, BM25_API_KEY (файл .env или секреты проекта DataSphere).
+# Адреса и ключи — BM25_URL, BM25_API_KEY, HNSW_URL, HNSW_API_KEY (файл .env или секреты проекта DataSphere).
 # Локально остаются источники, которым нужна история пользователя целиком (relisten, title, history, popular),
 # и поиск по аудио-эмбеддингам MuQ (audio).
 retrieval:
@@ -8,3 +8,4 @@ retrieval:
   bm25_genres: {enabled: true}
   bm25_tags: {enabled: true}
   bm25_title: {enabled: false}   # индекса title на сервере пока нет; артист + название ищет локальный title
+  hnsw: {enabled: true}

@@ -1,12 +1,13 @@
-"""Кандидаты из сервисов-кандгенов по HTTP (сейчас BM25: код в ветке dev/bm25, развёрнут на сервере).
+"""Кандидаты из сервисов-кандгенов по HTTP: BM25 (ветка dev/bm25) и HNSW (релиз hnsw-v1), оба на сервере.
 
 Кандгены обучаются и живут отдельно; здесь только predict-вызовы по контракту docs/candgen_api.md.
 Тот же интерфейс, что у локальных источников: search(ctx) -> [Candidate]. Ошибка сети / сервиса ->
 пустой список, предупреждение и last_error (пайплайн не падает, остальные источники работают).
 
   bm25_api   POST /bm25/search  слова из саммари -> индекс genres / tags / title     (candgen.bm25)
+  hnsw_api   POST /hnsw/search  текст последней реплики как есть -> EmbeddingGemma + LanceDB (candgen.hnsw)
 
-Конфиг: раздел candgen (timeout, retries; bm25: url, api_key) + источники с type: bm25_api.
+Конфиг: раздел candgen (timeout, retries; bm25 / hnsw: url, api_key) + источники с type: bm25_api | hnsw_api.
 Значения вида ${VAR} и ${VAR:-по умолчанию} берутся из переменных окружения (и файла .env).
 """
 from __future__ import annotations
@@ -109,7 +110,8 @@ class _RemoteRetriever(BaseRetriever):
     path = ""
     health_path = ""
 
-    def __init__(self, name: str, catalog: Catalog, client: CandgenClient, index: str, top_k: int = 200):
+    def __init__(self, name: str, catalog: Catalog, client: CandgenClient, index: Optional[str] = None,
+                 top_k: int = 200):
         super().__init__(catalog, top_k)
         self.name = name
         self.client = client
@@ -124,7 +126,9 @@ class _RemoteRetriever(BaseRetriever):
         body = self.payload(ctx, top_k or self.top_k)
         if body is None:
             return []
-        body.update(index=self.index, exclude_ids=sorted(ctx.banned_ids))
+        body["exclude_ids"] = sorted(ctx.banned_ids)
+        if self.index is not None:  # у HNSW одна таблица, поля index в его API нет
+            body["index"] = self.index
         try:
             resp = self.client.post(self.path, body)
         except CandgenError as e:
@@ -177,3 +181,25 @@ class BM25APIRetriever(_RemoteRetriever):
     def payload(self, ctx: Context, k: int) -> Optional[Dict[str, Any]]:
         words = self.words(ctx)
         return {"words": words, "k": k} if words else None
+
+
+class HNSWAPIRetriever(_RemoteRetriever):
+    """Текстовый семантический поиск: сервис сам переводит запрос в вектор EmbeddingGemma-2 и ищет в LanceDB.
+    Отправляется последняя реплика пользователя как есть (по-русски): профиль в запросе, по замерам автора, вредит."""
+    service = "hnsw"
+    path = "/hnsw/search"
+    health_path = "/health"
+    MAX_CHARS = 8192
+
+    def payload(self, ctx: Context, k: int) -> Optional[Dict[str, Any]]:
+        messages = ctx.request.user_messages
+        text = messages[-1].strip() if messages else ""
+        return {"query": text[:self.MAX_CHARS], "k": k} if text else None
+
+    def health(self) -> Dict[str, Any]:
+        try:
+            resp = self.client.get(self.health_path)
+        except CandgenError as e:
+            return {"url": self.client.url, "status": "unavailable", "error": str(e)}
+        return {"url": self.client.url, "status": resp.get("status"),
+                "index_version": f"{resp.get('release')}/{resp.get('table_version')}", "n_items": resp.get("n_items")}
