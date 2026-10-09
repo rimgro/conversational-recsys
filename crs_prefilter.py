@@ -413,7 +413,68 @@ def get_tagger(name: str, **kwargs: Any) -> BaseTagger:
         return DiffusionTagClassifier(**kwargs)
     if name == "lexicon":
         return LexiconTagger()
+    if name in ("systemone", "djev"):
+        return SystemoneTagger(**kwargs)
     raise ValueError(f"unknown tagger {name!r}")
+
+
+class SystemoneTagger(BaseTagger):
+    """Client for DiffusionGemma-Jev (`djev`) served by vLLM `/v1/systemone`.
+
+    One HTTP request per text (track or query) asks all tag questions at once;
+    the endpoint seeds the canvas, runs a single denoising step (read-only) and
+    returns per-choice probabilities. This is the full-scale JEV path used by
+    https://github.com/taeold/djev-run (DiffusionGemma-26B on Blackwell).
+    """
+
+    def __init__(self, url: str, *, timeout: float = 120.0, concurrency: int = 16) -> None:
+        if not url:
+            raise ValueError("SystemoneTagger requires a base url, e.g. https://<cloud-run-url>")
+        self.url = url.rstrip("/") + "/v1/systemone"
+        self.timeout = timeout
+        self.concurrency = concurrency
+
+    def _ask(self, text: str, tags: Sequence[str]) -> "Any":
+        import json
+        import urllib.request
+
+        import numpy as np
+
+        questions = {
+            f"t{i}": {
+                "type": "choice",
+                "instructions": QUESTION_TEMPLATES.get(TAG_GROUP.get(tag, "_default"), QUESTION_TEMPLATES["_default"]).format(tag=tag),
+                "criteria": ["yes", "no"],
+            }
+            for i, tag in enumerate(tags)
+        }
+        payload = json.dumps({"state": text, "questions": questions}).encode("utf-8")
+        req = urllib.request.Request(self.url, data=payload, headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            answers = data.get("answers", {})
+            out = np.zeros(len(tags), dtype="float32")
+            for i in range(len(tags)):
+                a = answers.get(f"t{i}", {})
+                probs = a.get("probabilities") or {}
+                out[i] = float(probs.get("yes", a.get("confidence", 0.0)))
+            return out
+        except Exception as exc:  # pragma: no cover - network
+            log(f"systemone request failed: {exc}")
+            return np.full(len(tags), 0.5, dtype="float32")
+
+    def classify(self, texts: Sequence[str], tags: Sequence[str], *, batch_size: int = 16) -> "Any":
+        import numpy as np
+        from concurrent.futures import ThreadPoolExecutor
+
+        tags = list(tags)
+        out = np.zeros((len(texts), len(tags)), dtype="float32")
+        with ThreadPoolExecutor(max_workers=self.concurrency) as ex:
+            for i, vec in enumerate(ex.map(lambda t: self._ask(t, tags), texts)):
+                out[i] = vec
+        return out
+
 
 
 # --------------------------------------------------------------------------- #

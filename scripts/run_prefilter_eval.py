@@ -35,6 +35,14 @@ def load_module(path: str, name: str):
     return module
 
 
+def _make_tagger(pre, args):
+    if args.tagger == "systemone":
+        return pre.SystemoneTagger(args.systemone_url)
+    if args.tagger == "diffusion":
+        return pre.DiffusionTagClassifier(args.tag_model, device=args.device, dtype=args.dtype, max_length=args.max_length)
+    return pre.LexiconTagger()
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="pre-filtering end-to-end run")
     p.add_argument("--dataset", required=True, help="dir with tracks_meta.parquet and *_queries/qrels.parquet")
@@ -42,7 +50,8 @@ def main() -> int:
     p.add_argument("--out", required=True)
     p.add_argument("--prefilter-module", default="crs_prefilter.py")
     p.add_argument("--gemma-module", default="recsys/retrieval/gemma_lancedb.py")
-    p.add_argument("--tagger", choices=["diffusion", "lexicon"], default="diffusion")
+    p.add_argument("--tagger", choices=["diffusion", "lexicon", "systemone"], default="diffusion")
+    p.add_argument("--systemone-url", default=None, help="djev /v1/systemone base url (Cloud Run)")
     p.add_argument("--tag-model", default="dllm-hub/Qwen3-0.6B-diffusion-mdlm-v0.1")
     p.add_argument("--device", default="cuda")
     p.add_argument("--dtype", default="float16")
@@ -91,10 +100,7 @@ def main() -> int:
         print(f"[run] resuming: {len(tags_by_id)} tracks already tagged", flush=True)
     todo = [r for r in records if r["m4a_id"] not in tags_by_id]
     if todo:
-        if args.tagger == "diffusion":
-            tagger = pre.DiffusionTagClassifier(args.tag_model, device=args.device, dtype=args.dtype, max_length=args.max_length)
-        else:
-            tagger = pre.LexiconTagger()
+        tagger = _make_tagger(pre, args)
         # incremental, resumable: classify in chunks and append to tags.jsonl
         with open(tags_path, "a", encoding="utf-8") as fh:
             for start in range(0, len(todo), args.tag_chunk):
@@ -134,10 +140,7 @@ def main() -> int:
     print(f"[run] queries: {len(queries)}", flush=True)
     embedder = gemma.GemmaEmbedder(device=args.device, dtype=args.dtype)
     metadata_df = pre.load_metadata(table)
-    if args.tagger == "diffusion":
-        query_tagger = pre.DiffusionTagClassifier(args.tag_model, device=args.device, dtype=args.dtype, max_length=args.max_length)
-    else:
-        query_tagger = pre.LexiconTagger()
+    query_tagger = _make_tagger(pre, args)
 
     # ---- 4. evaluate approaches ------------------------------------------- #
     results = {}
