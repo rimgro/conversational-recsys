@@ -46,7 +46,7 @@ jupyter lab inference.ipynb   # или открыть в DataSphere
 | `dev/bm25` | сервис BM25 (`POST /bm25/search`, индексы genres, tags, title) | развёрнут на сервере |
 | `fix/bm25-comma-split` | исправление сборки индексов BM25 (жанры через запятую) | ждёт слияния в `dev/bm25` |
 | `dev/hnsw`, релиз `hnsw-v1` | текстовый семантический поиск (EmbeddingGemma + LanceDB, `POST /hnsw/search`) | развёрнут на сервере |
-| `dev-ranker` | ранкер LightGBM | в разработке |
+| `dev-ranker` | обучение ранкера LightGBM (признаки, `fit.py`) | модель v3 встроена здесь: `ranker.type: lgbm` |
 
 - `configs/candgen.yaml` включает источники `bm25_cards` и `hnsw` с сервера вместо локального `bm25`.
   Адреса и ключи — `BM25_URL`, `BM25_API_KEY`, `HNSW_URL`, `HNSW_API_KEY` (файл `.env` или секреты DataSphere).
@@ -64,6 +64,7 @@ jupyter lab inference.ipynb   # или открыть в DataSphere
 python evaluate.py --n-users 1000                   # быстро, ~3 мин локально
 python evaluate.py --n-users all --candgen          # весь сплит, BM25 и HNSW с сервера
 python evaluate.py --set ranker.type=heuristic      # любой параметр конфига
+python evaluate.py --candgen --config configs/ranker_lgbm.yaml   # ранкер LightGBM на пуле bm25_cards + hnsw
 ```
 
 Результат — `outputs/<время>_<сплит>/`: `metrics.json` (метрики, конфиг, git-коммит, версии индексов сервисов,
@@ -94,7 +95,7 @@ python evaluate.py --set ranker.type=heuristic      # любой парамет�
 | 1. разбор запроса → `DialogSummary` | `dialog.py` | правила (`rule`), `llm` с фолбэком на правила |
 | 2. кандидаты | `retrieval/sources.py` | см. ниже |
 | 3. RRF + фильтры + дедуп | `fusion.py` | настоящий |
-| 4. ранкер | `ranking.py` | `stub` (порядок RRF), `heuristic`, `api` |
+| 4. ранкер | `ranking.py`, `ranker_lgbm.py` | `stub` (порядок RRF), `heuristic`, `api`, `lgbm` (обученная модель) |
 | 5. описание | `explain.py` | `stub` (приветствие + список), `llm` |
 
 Источники кандидатов:
@@ -139,6 +140,7 @@ recsys/
     remote.py     шаг 2: источники с сервера по HTTP (bm25_api, hnsw_api)
   fusion.py       шаг 3: RRF, фильтры, веса источников
   ranking.py      шаг 4: признаки, StubRanker, HeuristicRanker, APIRanker
+  ranker_lgbm.py  шаг 4: LGBMRanker — LightGBM LambdaRank из ranker_assets/ (ranker.type: lgbm)
   explain.py      шаг 5: StubExplainer, LLMExplainer (ответ по-английски)
   eval.py         nDCG@20 и др., evaluate, metrics_by, compare_configs
   data/
@@ -153,6 +155,7 @@ tests/
 ## Как заменить заглушку
 
 - **Ранкер**: `rank(features, ctx) -> DataFrame` с колонкой `rank_score`; признаки в `build_features` (`ranking.py`). Внешний сервис: `ranker.type: api`.
+- **Ранкер LightGBM** (`ranker.type: lgbm`, `configs/ranker_lgbm.yaml`): модель и таблицы в `ranker_assets/v3/` (~6 МБ), обучена в ветке `dev-ranker` на пуле `bm25_cards` + `hnsw` по 100 → RRF → top-200; конфиг включает ровно этот пул. На 20k запросов `test_public` nDCG@20 = 0.295 против 0.166 у порядка RRF (`ranker_assets/v3/report_test_public.csv`).
 - **Новый источник кандидатов**: наследник `BaseRetriever` с `search(ctx) -> list[Candidate]` в `retrieval/`; зарегистрировать в `build_retrievers` (`retrieval/sources.py`) и включить в `configs/default.yaml`.
 - **LLM**: `llm.type: local`, `summarizer.type: llm`, `explainer.type: llm`.
 

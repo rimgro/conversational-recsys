@@ -4,6 +4,7 @@
   StubRanker       заглушка: порядок RRF (на схеме «top-20 первых»)
   HeuristicRanker  взвешенная сумма признаков, бейзлайн до CatBoost
   APIRanker        «ранкер по API»: POST признаков на внешний сервис, при ошибке -> StubRanker
+  LGBMRanker       обученный LightGBM LambdaRank (recsys/ranker_lgbm.py, configs/ranker_lgbm.yaml)
 """
 
 from __future__ import annotations
@@ -186,4 +187,7 @@ def build_ranker(cfg: Dict[str, Any]) -> BaseRanker:
         return HeuristicRanker(rcfg.get("weights"))
     if kind == "api":
         return APIRanker(rcfg["api_url"], timeout=rcfg.get("timeout", 2.0), api_key=rcfg.get("api_key"))
+    if kind == "lgbm":
+        from recsys.ranker_lgbm import LGBMRanker  # lightgbm нужен только этому ранкеру
+        return LGBMRanker(rcfg["model_dir"], score_sources=rcfg.get("score_sources"))
     raise ValueError(f"Неизвестный ranker.type: {kind}")

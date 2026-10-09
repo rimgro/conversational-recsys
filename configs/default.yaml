@@ -78,8 +78,10 @@ fusion:
   cold_start_boost: {popular: 2.0}                                         # истории нет
 
 ranker:
-  type: stub                   # stub (порядок RRF) | heuristic | api
+  type: stub                   # stub (порядок RRF) | heuristic | api | lgbm (configs/ranker_lgbm.yaml)
   top_k: 20                    # длина выдачи: метрика датасета — nDCG@20
+  model_dir: ranker_assets/v3  # для type: lgbm — model.txt, features.json, tracks.parquet, items.parquet
+  score_sources: {score_hnsw: hnsw, score_bm25: bm25_cards}   # для type: lgbm: признак модели -> источник
   api_url: null               # для type: api
   api_key: null
   timeout: 2.0                # секунды; при ошибке API -> порядок RRF
