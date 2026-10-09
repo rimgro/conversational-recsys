@@ -56,6 +56,14 @@ def load_data(cfg: Dict[str, Any], verbose: bool = True) -> DataBundle:
     return bundle
 
 
+def load_catalog(cfg: Dict[str, Any]) -> Catalog:
+    """Только каталог треков (без пользователей и запросов): для make_index.py и проверок."""
+    dcfg = cfg["data"]
+    if dcfg["source"] == "crs":
+        return _crs_catalog(dcfg["crs"], dcfg)
+    return load_data(cfg, verbose=False).catalog
+
+
 def _crs_catalog(c: Dict[str, Any], dcfg: Dict[str, Any]) -> Catalog:
     """tracks_meta -> Catalog, с кэшем (parquet + эмбеддинги .npy) в data.cache_dir."""
     src = split_path(c["dir"], "tracks_meta")

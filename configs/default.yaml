@@ -40,15 +40,12 @@ summarizer:
   type: rule                   # rule (заглушка) | llm (фолбэк на rule)
   min_tag_count: 2
 
-candgen:                       # сервисы-кандгены по HTTP (API: docs/candgen_api.md): retrieval.bm25 и retrieval.hnsw
+candgen:                       # сервис-кандген HNSW по HTTP (API: docs/candgen_api.md): retrieval.hnsw
   timeout: 5.0                 # секунды на запрос; при ошибке источник пропускается
   retries: 1                   # повтор при обрыве соединения (таймаут не повторяется)
-  bm25:
-    url: ${BM25_URL}           # адрес сервера BM25 (.env или секрет DataSphere)
-    api_key: ${BM25_API_KEY}   # заголовок X-API-Key; пусто = без ключа
   hnsw:
     url: ${HNSW_URL}           # текстовый семантический поиск (релиз hnsw-v1)
-    api_key: ${HNSW_API_KEY}
+    api_key: ${HNSW_API_KEY}   # заголовок X-API-Key; пусто = без ключа
     embedder:                  # вектор запроса строим сами (сервис принимает только vector): recsys/retrieval/
                                # query_embedder.py; подготовка — python make_embed.py; без модели hnsw пропускается
       model_name: google/embeddinggemma-2
@@ -58,8 +55,16 @@ candgen:                       # сервисы-кандгены по HTTP (API:
 retrieval:                     # источники кандидатов (recsys/retrieval/); enabled: false выключает
   relisten: {enabled: true, top_k: 100, history_weight: 0.3}   # свои треки: 93% целей — повторные прослушивания
   audio:    {enabled: true, top_k: 200}                        # MuQ: похожие на образец (similar_to) или на вкус
-  bm25:     {enabled: true, index: cards, top_k: 200}          # сервис BM25 по карточке трека (candgen.bm25)
+  bm25:     {enabled: true, top_k: 200}                        # локальный BM25 по карточке трека (bm25_index)
   hnsw:     {enabled: true, top_k: 200}                        # сервис HNSW: вектор реплики (candgen.hnsw)
+
+bm25_index:                    # локальный BM25 по карточке трека: источник bm25 и совпадение с запросом в relisten
+  k1: 1.2                      # (recsys/retrieval/local_index.py); собирается ~минуту и кэшируется в data.cache_dir:
+  b: 0.75                      # python make_index.py
+  weights: {meta: 1.0, caption: 0.0, lyrics: 1.25, album: 0.0, artist: 0.0, about: 0.3}   # вес поля в скоре;
+                               # 0 — поле не участвует (индекс пересобирать не нужно). Подобраны на train:
+                               # текст песни даёт основной прирост (relisten nDCG@20 0.21 -> 0.28),
+                               # caption, album, artist по отдельности не помогают
 
 fusion:
   rrf_k: 60

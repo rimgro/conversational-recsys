@@ -13,11 +13,11 @@ from recsys.data import load_data  # noqa: E402
 
 @pytest.fixture(scope="session")
 def cfg():
-    # сервисы BM25 и HNSW знают только каталог датасета: на синтетике работают relisten и audio,
-    # сервисы проверяет tests/test_remote.py против поддельного сервера
+    # сервис HNSW знает только каталог датасета: на синтетике работают relisten, audio и bm25,
+    # HNSW проверяет tests/test_remote.py против поддельного сервера
     return load_config(os.path.join(ROOT, "configs", "default.yaml"),
                        {"data": {"source": "synthetic", "synthetic": {"n_tracks": 1500, "n_users": 60}},
-                        "retrieval": {"bm25": {"enabled": False}, "hnsw": {"enabled": False}}})
+                        "retrieval": {"hnsw": {"enabled": False}}})
 
 
 @pytest.fixture(scope="session")

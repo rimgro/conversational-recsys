@@ -37,8 +37,8 @@ def test_evaluate_stops_when_candgen_down(tmp_path):
         url = f"http://127.0.0.1:{s.getsockname()[1]}"  # никто не слушает
     # --synthetic выключает сервисы; включаем их обратно, чтобы проверить /health
     code = evaluate.main(["--synthetic", "--n-users", "5", "--run-dir", str(tmp_path / "run"),
-                          "--set", "retrieval.bm25.enabled=true", "--set", "retrieval.hnsw.enabled=true",
-                          "--set", f"candgen.bm25.url={url}", "--set", f"candgen.hnsw.url={url}",
+                          "--set", "retrieval.hnsw.enabled=true",
+                          "--set", f"candgen.hnsw.url={url}",
                           "--set", "candgen.timeout=0.5"])
     assert code == 2 and not (tmp_path / "run").exists()
 

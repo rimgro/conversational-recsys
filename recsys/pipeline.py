@@ -15,7 +15,7 @@ from recsys.explain import BaseExplainer, build_explainer
 from recsys.fusion import apply_constraints, apply_filters, rrf, source_weights
 from recsys.llm import BaseLLM, StubLLM, build_llm
 from recsys.ranking import BaseRanker, build_features, build_ranker, cap_per_artist, reasons_for
-from recsys.retrieval import BaseRetriever, BM25Index, build_retrievers
+from recsys.retrieval import BaseRetriever, CardIndex, build_retrievers
 from recsys.schemas import Candidate, Context, FusedCandidate, RankedTrack, Request, Response
 
 
@@ -43,7 +43,7 @@ class Pipeline:
 
     @classmethod
     def from_config(cls, cfg: Dict[str, Any], catalog: Catalog, llm: Optional[BaseLLM] = None,
-                    bm25_index: Optional[BM25Index] = None) -> "Pipeline":
+                    bm25_index: Optional[CardIndex] = None) -> "Pipeline":
         """llm и bm25_index можно передать готовыми, чтобы не грузить/строить их заново."""
         needs_llm = cfg.get("summarizer", {}).get("type") == "llm" or cfg.get("explainer", {}).get("type") == "llm"
         if llm is None:
@@ -58,9 +58,9 @@ class Pipeline:
         )
 
     @property
-    def bm25_index(self) -> Optional[BM25Index]:
-        """Локальный BM25-индекс relisten: передать в следующий Pipeline.from_config, чтобы не строить заново."""
-        return next((r.index for r in self.retrievers if r.name == "relisten"), None)
+    def bm25_index(self) -> Optional[CardIndex]:
+        """Индекс карточек (bm25 и relisten): передать в следующий Pipeline.from_config, чтобы не загружать заново."""
+        return next((r.index for r in self.retrievers if r.name in ("bm25", "relisten")), None)
 
     def retrieve(self, request: Request) -> Retrieval:
         """Шаги 1–3: разбор диалога, кандидаты, RRF + фильтры. Без ранкера и описания (метрики кандгенов)."""

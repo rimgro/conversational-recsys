@@ -1,8 +1,8 @@
 """Прогон валидации: метрики пайплайна на сплите датасета (по умолчанию test_public).
 
-    python evaluate.py --n-users 1000                       # 1000 пользователей test_public, BM25 и HNSW с сервера
+    python evaluate.py --n-users 1000                       # 1000 пользователей test_public, HNSW с сервера
     python evaluate.py --n-users all                        # весь сплит
-    python evaluate.py --n-users 1000 --offline             # без сервисов: только relisten и audio, быстро
+    python evaluate.py --n-users 1000 --offline             # без сервиса HNSW: relisten, audio, bm25
     python evaluate.py --set ranker.type=heuristic          # любой параметр конфига
     python evaluate.py --synthetic                          # без данных: проверить, что код работает
 
@@ -18,9 +18,9 @@
   per_request.csv       метрики каждого запроса; дописывается по ходу, при обрыве прогона не пропадает
   config.yaml           полный конфиг прогона
 
-Перед стартом проверяется /health сервисов BM25 и HNSW: если сервис недоступен, прогон не начинается (код выхода 2),
-чтобы метрики не посчитались молча без его кандидатов. Адреса и ключи — BM25_URL, BM25_API_KEY, HNSW_URL,
-HNSW_API_KEY (из окружения или файла .env).
+Перед стартом проверяется /health сервиса HNSW: если он недоступен, прогон не начинается (код выхода 2),
+чтобы метрики не посчитались молча без его кандидатов. Адрес и ключ — HNSW_URL, HNSW_API_KEY (из окружения или
+файла .env). Индекс BM25 локальный: один раз собирается и кэшируется (python make_index.py).
 Полный прогон в облаке без открытого ноутбука: jobs/evaluate.yaml (DataSphere Jobs).
 """
 import argparse
@@ -68,13 +68,13 @@ def git_commit() -> str:
         return ""
 
 
-REMOTE_SOURCES = ("bm25", "hnsw")
+REMOTE_SOURCES = ("hnsw",)
 
 
 def build_config(a: argparse.Namespace):
     files = [config_path("default.yaml")] + a.config
     over: dict = {"data": {"eval_split": a.split}}
-    if a.offline or a.synthetic:  # у сервисов каталог датасета: синтетических треков они не знают
+    if a.offline or a.synthetic:  # у сервиса каталог датасета: синтетических треков он не знает
         over["retrieval"] = {name: {"enabled": False} for name in REMOTE_SOURCES}
     if a.synthetic:
         over["data"]["source"] = "synthetic"
@@ -102,7 +102,7 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--synthetic", action="store_true", help="синтетика вместо датасета")
     p.add_argument("--n-users", help="сколько пользователей взять из сплита; all — все (по умолчанию из конфига)")
     p.add_argument("--max-queries", help="запросов на пользователя; all — все (по умолчанию из конфига)")
-    p.add_argument("--offline", action="store_true", help="без сервисов BM25 и HNSW: только локальные источники")
+    p.add_argument("--offline", action="store_true", help="без сервиса HNSW: только локальные источники")
     p.add_argument("--config", action="append", default=[], help="ещё YAML поверх (можно несколько)")
     p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                    help="параметр конфига, например ranker.type=heuristic (можно несколько)")
@@ -120,7 +120,7 @@ def check_candgen(pipe: Pipeline):
     for name, h in health.items():
         print(f"[candgen] {name}: {h}")
     if down:
-        print(f"сервисы недоступны: {sorted(down)}; проверьте адреса и ключи в .env (BM25_URL, HNSW_URL, ...)", file=sys.stderr)
+        print(f"сервисы недоступны: {sorted(down)}; проверьте адрес и ключ в .env (HNSW_URL, HNSW_API_KEY)", file=sys.stderr)
         return remote, None
     return remote, health
 

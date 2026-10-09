@@ -1,16 +1,28 @@
-"""Локальный BM25-индекс (не путать с сервисом BM25): по нему relisten ранжирует историю пользователя по запросу.
-BM25 на scipy.sparse, 64k треков строятся в памяти за секунды.
+"""Локальный BM25 по карточке трека: источник bm25 (топ по каталогу) и совпадение с запросом в relisten
+(те же скоры, но только по трекам истории). BM25 на scipy.sparse, без сервисов.
 
-Документ трека: теги (повтор по весу), жанры, артист, название, альбом, десятилетие, страна, язык, инструментал.
-Виды токенов:
-  слова           'indie', 'rock'        мягкое совпадение
-  't:indie_rock'  тег целиком            'a:the_velvet_owls'  артист целиком
-  'c:us' страна артиста, 'l:en' язык текста, 'y:1983' год релиза
+Карточка — несколько полей, у каждого свой BM25-индекс; скор трека = сумма скоров полей с весами
+(bm25_index.weights, задаются при запросе — индекс пересобирать не нужно). Поля отдельно, а не одним текстом:
+иначе длинные тексты песен и описания из-за нормировки на длину «размывают» совпадения по тегам.
+
+  meta     теги Last.fm (повтор по весу), жанры, артист, название, альбом, год / десятилетие, страна, язык, инструментал;
+           токены: слова 'indie', 'rock'; 't:indie_rock' тег целиком; 'a:the_velvet_owls' артист целиком;
+           'c:us' страна артиста, 'l:en' язык текста, 'y:1983' год релиза
+  caption  pseudo_caption — автоописание по тегам
+  lyrics   текст песни
+  album    название, теги и жанры альбома
+  artist   жанры артиста
+  about    описание альбома и статья Википедии об артисте
+
+Сборка на полном каталоге — около минуты, поэтому индекс кэшируется в data.cache_dir (python make_index.py).
 """
 from __future__ import annotations
 
+import hashlib
+import os
+import time
 from collections import Counter
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -115,18 +127,35 @@ class BM25Index:
         weights = np.array([w for _, w in cols], dtype=np.float32)
         return np.asarray(self.W[:, idx] @ weights).ravel()
 
-    def search(self, query: Dict[str, float], top_k: int,
-               exclude: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray]:
-        s = self.scores(query)
-        if exclude is not None and len(exclude):
-            s[exclude] = 0.0
-        nz = np.flatnonzero(s > 0)
-        if len(nz) == 0:
-            return nz, s[nz]
-        k = min(top_k, len(nz))
-        top = nz[np.argpartition(-s[nz], k - 1)[:k]]
-        top = top[np.argsort(-s[top], kind="stable")]
-        return top, s[top]
+    def arrays(self) -> Dict[str, np.ndarray]:
+        """Для сохранения: матрица, словарь (термины по номеру столбца), параметры."""
+        terms = np.empty(len(self.vocab), dtype=object)
+        for t, j in self.vocab.items():
+            terms[j] = t
+        return {"data": self.W.data, "indices": self.W.indices, "indptr": self.W.indptr,
+                "shape": np.array(self.W.shape), "terms": terms.astype(str), "params": np.array([self.k1, self.b])}
+
+    @classmethod
+    def from_arrays(cls, a: Dict[str, np.ndarray]) -> "BM25Index":
+        idx = cls(float(a["params"][0]), float(a["params"][1]))
+        idx.W = sp.csc_matrix((a["data"], a["indices"], a["indptr"]), shape=tuple(a["shape"]))
+        idx.vocab = {str(t): j for j, t in enumerate(a["terms"])}
+        idx.n_docs = int(a["shape"][0])
+        return idx
+
+
+def top_scores(s: np.ndarray, top_k: int, exclude: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray]:
+    """Позиции и скоры top_k треков с положительным скором, по убыванию; exclude — позиции, которые не берём."""
+    if exclude is not None and len(exclude):
+        s = s.copy()
+        s[exclude] = 0.0
+    nz = np.flatnonzero(s > 0)
+    if len(nz) == 0:
+        return nz, s[nz]
+    k = min(top_k, len(nz))
+    top = nz[np.argpartition(-s[nz], k - 1)[:k]]
+    top = top[np.argsort(-s[top], kind="stable")]
+    return top, s[top]
 
 
 def build_bm25_index(catalog: Catalog, k1: float = 1.2, b: float = 0.75) -> BM25Index:
@@ -135,3 +164,115 @@ def build_bm25_index(catalog: Catalog, k1: float = 1.2, b: float = 0.75) -> BM25
     docs = (track_document(dict(zip(cols, vals))) for vals in zip(*(catalog.df[c] for c in cols)))
     return BM25Index(k1, b).fit(docs)
 
+
+
+# ---------------------------------------------------------------- карточка трека: несколько полей
+
+CARD_FIELDS: Dict[str, List[str]] = {   # поле карточки -> колонки tracks_meta (meta строится из каталога)
+    "caption": ["pseudo_caption"],
+    "lyrics": ["lyrics"],
+    "album": ["album_name", "album_tags", "album_genres"],
+    "artist": ["artist_genres"],
+    "about": ["album_description", "artist_wiki_en"],
+}
+CARD_VERSION = 1   # поднять при изменении рецепта карточки: старый кэш не подхватится
+
+
+def _text(x: Any) -> str:
+    """Ячейка tracks_meta -> текст: строка как есть, список / массив тегов через запятую, пропуск -> ''."""
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return ""
+    if isinstance(x, str):
+        return x
+    if hasattr(x, "__len__"):
+        return ", ".join(str(v) for v in x)
+    return str(x)
+
+
+class CardIndex:
+    """Поля карточки, у каждого свой BM25Index; scores = сумма скоров полей с весами."""
+
+    def __init__(self, fields: Dict[str, BM25Index]):
+        self.fields = fields
+        self.n_docs = next(iter(fields.values())).n_docs
+
+    def scores(self, query: Dict[str, float], weights: Optional[Dict[str, float]] = None) -> np.ndarray:
+        """weights: поле -> вес (поля без веса не участвуют); None — все поля с весом 1."""
+        s = np.zeros(self.n_docs, dtype=np.float32)
+        for name, idx in self.fields.items():
+            w = 1.0 if weights is None else float(weights.get(name, 0.0))
+            if w:
+                s += w * idx.scores(query)
+        return s
+
+    def search(self, query: Dict[str, float], top_k: int, exclude: Optional[np.ndarray] = None,
+               weights: Optional[Dict[str, float]] = None) -> Tuple[np.ndarray, np.ndarray]:
+        return top_scores(self.scores(query, weights), top_k, exclude)
+
+    def save(self, path: str) -> None:
+        arrays = {f"{name}/{k}": v for name, idx in self.fields.items() for k, v in idx.arrays().items()}
+        tmp = path + ".tmp.npz"
+        np.savez(tmp, **arrays)
+        os.replace(tmp, path)  # не оставить половину файла, если сборку прервали
+
+    @classmethod
+    def load(cls, path: str) -> "CardIndex":
+        with np.load(path) as z:
+            names = list(dict.fromkeys(k.split("/")[0] for k in z.files))
+            return cls({n: BM25Index.from_arrays({k.split("/")[1]: z[k] for k in z.files if k.startswith(n + "/")})
+                        for n in names})
+
+
+def build_card_index(catalog: Catalog, meta: Optional[pd.DataFrame] = None, k1: float = 1.2,
+                     b: float = 0.75) -> CardIndex:
+    """meta — tracks_meta с колонками CARD_FIELDS и m4a_id (строки в любом порядке); без неё текстовые поля
+    берутся из колонок каталога, если они там есть (синтетика), иначе поля нет."""
+    fields = {"meta": build_bm25_index(catalog, k1, b)}
+    src = catalog.df
+    if meta is not None:
+        src = meta.drop_duplicates("m4a_id").set_index("m4a_id").reindex(catalog.track_ids)
+    for name, cols in CARD_FIELDS.items():
+        cols = [c for c in cols if c in src]
+        if not cols:
+            continue
+        texts = (" ".join(_text(v) for v in row) for row in zip(*(src[c].to_numpy() for c in cols)))
+        fields[name] = BM25Index(k1, b).fit(Counter(index_words(t)) for t in texts)
+    return CardIndex(fields)
+
+
+def card_index_path(cfg: Dict[str, Any], catalog: Catalog) -> Optional[str]:
+    """Файл кэша: зависит от tracks_meta (размер, время), каталога, рецепта и k1 / b; None — без кэша."""
+    dcfg, icfg = cfg["data"], cfg.get("bm25_index", {})
+    if dcfg.get("source") != "crs" or not dcfg.get("cache_dir") or not dcfg.get("use_cache", True):
+        return None
+    from recsys.data.crs import split_path
+    st = os.stat(split_path(dcfg["crs"]["dir"], "tracks_meta"))
+    key = (f"{CARD_VERSION}_{st.st_size}_{int(st.st_mtime)}_{len(catalog)}_{dcfg.get('max_tags', 20)}_"
+           f"{icfg.get('k1', 1.2)}_{icfg.get('b', 0.75)}")
+    return os.path.join(dcfg["cache_dir"], f"bm25_cards_{hashlib.md5(key.encode()).hexdigest()[:10]}.npz")
+
+
+def load_card_index(cfg: Dict[str, Any], catalog: Catalog, verbose: bool = True) -> CardIndex:
+    """Из кэша, если есть; иначе собирает (на Music4All-CRS — с текстовыми полями tracks_meta) и кладёт в кэш."""
+    path = card_index_path(cfg, catalog)
+    if path and os.path.exists(path):
+        return CardIndex.load(path)
+    icfg = cfg.get("bm25_index", {})
+    t0 = time.time()
+    meta = None
+    if cfg["data"].get("source") == "crs":
+        import pyarrow.parquet as pq
+        from recsys.data.crs import split_path
+        src = split_path(cfg["data"]["crs"]["dir"], "tracks_meta")
+        present = set(pq.read_schema(src).names)
+        cols = ["m4a_id"] + [c for cs in CARD_FIELDS.values() for c in cs if c in present]
+        meta = pq.read_table(src, columns=cols).to_pandas()
+    index = build_card_index(catalog, meta, k1=icfg.get("k1", 1.2), b=icfg.get("b", 0.75))
+    if path:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        index.save(path)
+    if verbose:
+        sizes = ", ".join(f"{n}: {len(i.vocab)}" for n, i in index.fields.items())
+        print(f"[bm25] индекс карточек собран за {time.time() - t0:.0f} c (словарь — {sizes})"
+              + (f" -> {path}" if path else ""))
+    return index

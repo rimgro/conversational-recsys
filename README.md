@@ -11,7 +11,7 @@
 |---|---|
 | `inference.ipynb` | запрос пользователя → ответ и треки; следующая реплика |
 | `experiments.ipynb` | почему такая выдача: разбор запроса по шагам, как правила понимают настоящие запросы, сравнение вариантов конфига, LLM |
-| `examples/candgen.ipynb` | проверка сервисов BM25 и HNSW руками: какие запросы и что они отвечают |
+| `examples/candgen.ipynb` | проверка сервиса HNSW руками (и старого сервиса BM25 — пайплайн его не использует) |
 
 ## Запуск
 
@@ -24,9 +24,10 @@ jupyter lab inference.ipynb   # или открыть в DataSphere
 Вектор запроса для HNSW строим сами (EmbeddingGemma-2, GPU если есть, иначе CPU): один раз на машину
 `python make_embed.py` — проверит пакеты, скачает веса, построит вектор и сверит его с индексом на сервере.
 
-Сервисы BM25 и HNSW включены по умолчанию: задать `BM25_URL`, `BM25_API_KEY`, `HNSW_URL`, `HNSW_API_KEY` (файл `.env`
-в корне — он не в git — или секреты DataSphere). Без них: `USE_CANDGEN = False` в ноутбуке или `--offline` у скриптов
-(остаются `relisten` и `audio`).
+BM25 локальный: индекс карточек треков собирается из `tracks_meta` за ~20 с и кэшируется в `cache/` — один раз
+`python make_index.py` (или сам при первом запуске). Сервис HNSW включён по умолчанию: задать `HNSW_URL`, `HNSW_API_KEY`
+(файл `.env` в корне — он не в git — или секреты DataSphere). Без него: `USE_CANDGEN = False` в ноутбуке или `--offline`
+у скриптов (остаются `relisten`, `audio`, `bm25`).
 
 Данные — Music4All-CRS в папке `music4all_crs/` (`data.crs.dir`, в git не хранится): `tracks_meta.parquet`,
 `train.parquet` / `test_public.parquet` (пользователи), `*_queries.parquet` (запросы), `*_qrels.parquet` (ответы).
@@ -44,13 +45,12 @@ jupyter lab inference.ipynb   # или открыть в DataSphere
 
 | Ветка | Что | Сейчас |
 |---|---|---|
-| `dev/bm25` | сервис BM25 (`POST /bm25/search`, индексы genres, tags, title) | развёрнут на сервере |
-| `fix/bm25-comma-split` | исправление сборки индексов BM25 (жанры через запятую) | ждёт слияния в `dev/bm25` |
+| `bm25-cards` | сервис BM25 по карточке трека | развёрнут, но пайплайн его не использует: BM25 локальный (`local_index.py`) |
 | `dev/hnsw`, релиз `hnsw-v1` | текстовый семантический поиск (EmbeddingGemma + LanceDB, `POST /hnsw/search`) | развёрнут на сервере |
 | `dev-ranker` | ранкер LightGBM | в разработке |
 
-- Источники `bm25` и `hnsw` в `configs/default.yaml` — это они. Адреса и ключи — `BM25_URL`, `BM25_API_KEY`, `HNSW_URL`,
-  `HNSW_API_KEY` (файл `.env` или секреты DataSphere).
+- Источник `hnsw` в `configs/default.yaml` — это он. Адрес и ключ — `HNSW_URL`, `HNSW_API_KEY` (файл `.env` или секреты
+  DataSphere).
 - Если сервис недоступен, его источники возвращают пустой список с предупреждением, остальные работают.
 
 ## Валидация (`evaluate.py`)
@@ -61,9 +61,9 @@ jupyter lab inference.ipynb   # или открыть в DataSphere
 (`recall@<источник>`) и всех вместе (`recall@fused`) — качество кандгенов.
 
 ```bash
-python evaluate.py --n-users 1000                   # 1000 пользователей, BM25 и HNSW с сервера
+python evaluate.py --n-users 1000                   # 1000 пользователей, HNSW с сервера
 python evaluate.py --n-users all                    # весь сплит
-python evaluate.py --n-users 1000 --offline         # без сервисов (relisten и audio), ~3 мин
+python evaluate.py --n-users 1000 --offline         # без HNSW (relisten, audio, bm25), ~1 мин
 python evaluate.py --set ranker.type=heuristic      # любой параметр конфига
 ```
 
@@ -72,7 +72,7 @@ python evaluate.py --set ranker.type=heuristic      # любой парамет�
 (дописывается по ходу), `config.yaml`.
 Прогон не начнётся, если сервис недоступен (код выхода 2).
 
-Скорость: ~30 запросов/с без сервисов, ~3 запроса/с с BM25 сервера, ~2 запроса/с с HNSW (он отвечает ~0.5 с).
+Скорость: ~130 запросов/с без HNSW, ~2 запроса/с с HNSW (он отвечает ~0.5 с).
 Короткие прогоны — из ноутбука (`!python evaluate.py ...`) или локально; полный — в DataSphere Jobs без открытого
 ноутбука: `datasphere project job execute -p <id проекта> -c jobs/evaluate.yaml` (что подготовить — в начале файла).
 
@@ -128,9 +128,9 @@ python evaluate_candgen.py --split train --set fusion.exclude_top_tags=5   # п�
 
 | Источник | Как ищет | Зачем |
 |---|---|---|
-| `relisten` | треки из истории пользователя: совпадение с запросом (локальный BM25 по тегам, жанрам, артисту, году) + сколько и как недавно слушал | 93% целей — повторные прослушивания, другие источники их почти не находят |
+| `relisten` | треки из истории пользователя: совпадение с запросом (тот же BM25 карточки, только по истории) + сколько и как недавно слушал | 93% целей — повторные прослушивания, другие источники их почти не находят |
 | `audio` | MuQ-эмбеддинги: ближайшие к треку-образцу «like X by Y» или к центру вкуса | similar_to (новые треки, похожие по звучанию) |
-| `bm25` | сервис BM25 по карточке трека (теги, жанры, название, артист, год, ...): слова запроса | genre, era_region, complex, exact, lyrics |
+| `bm25` | локальный BM25 по карточке трека: теги, жанры, артист, название, год + текст песни + описания (поля с весами `bm25_index.weights`) | genre, era_region, complex, exact, lyrics |
 | `hnsw` | сервис HNSW: вектор реплики (EmbeddingGemma строим сами, `make_embed.py`) | смысл запроса: vague_recall, lyrics_theme, mood |
 
 Контракты между шагами: `recsys/schemas.py` (`Request`, `DialogSummary`, `Candidate`, `FusedCandidate`, `RankedTrack`, `Response`).
@@ -147,7 +147,8 @@ experiments.ipynb          эксперименты: разбор по шага�
 configs/default.yaml       все параметры и переключатели
 docs/dataset.md            описание датасета
 docs/candgen_api.md        API сервисов-кандгенов (контракт с нашей частью)
-examples/candgen.ipynb     проверка BM25 и HNSW руками
+examples/candgen.ipynb     проверка сервиса HNSW руками
+make_index.py              предподсчёт локального BM25-индекса карточек (cache/)
 recsys/
   schemas.py      контракты между шагами
   config.py       загрузка YAML + overrides (предупреждает об опечатках в ключах)
@@ -156,7 +157,7 @@ recsys/
   llm.py          StubLLM, LocalLLM (transformers), extract_json
   dialog.py       шаг 1: RuleSummarizer (заглушка), LLMSummarizer, промпты
   retrieval/
-    local_index.py  локальный BM25-индекс для relisten — не сервис BM25
+    local_index.py  локальный BM25 по карточке трека (поля с весами), кэш индекса
     sources.py    шаг 2: relisten, audio и сборка источников из конфига
     remote.py     шаг 2: сервисы bm25 и hnsw по HTTP
   fusion.py       шаг 3: RRF, фильтры, ограничения запроса, веса источников

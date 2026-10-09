@@ -4,8 +4,11 @@
   relisten  свои треки пользователя: совпадение с запросом + вес в истории (93% целей датасета — повторные
             прослушивания, их ищет только он)
   audio     эмбеддинги MuQ: похожие по звуку на трек-образец («like X by Y», similar_to) или на центр вкуса
-  bm25      сервис BM25 по карточке трека: слова запроса (remote.py)
+  bm25      локальный BM25 по карточке трека (local_index.py): топ по всему каталогу
   hnsw      сервис HNSW: семантический поиск по вектору реплики (remote.py)
+
+bm25 и relisten считают совпадение с запросом по одному индексу карточек (CardIndex) с весами полей
+bm25_index.weights: bm25 — по всем трекам, relisten — только по истории пользователя.
 
 Треки из ctx.banned_ids источники не возвращают, чтобы не тратить на них top_k.
 """
@@ -18,8 +21,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from recsys.data.catalog import Catalog
-from recsys.retrieval.local_index import (BM25Index, artist_token, build_bm25_index, country_token, index_words,
-                                          lang_token, tag_token, year_token)
+from recsys.retrieval.local_index import (CardIndex, artist_token, country_token, index_words, lang_token,
+                                          load_card_index, tag_token, year_token)
 from recsys.schemas import Candidate, Context, DialogSummary
 
 
@@ -41,7 +44,7 @@ class BaseRetriever(ABC):
 
 
 def query_terms(s: DialogSummary) -> Dict[str, float]:
-    """Саммари -> взвешенные токены локального индекса (local_index.py): тег целиком ×2 и его слова, артисты ×3,
+    """Саммари -> взвешенные токены индекса карточек (local_index.py): тег целиком ×2 и его слова, артисты ×3,
     слова query, страна / язык / год; слова исключённых тегов убираем, если они не входят в желаемые
     ('рок, но не хард-рок')."""
     q: Counter = Counter()
@@ -65,15 +68,35 @@ def query_terms(s: DialogSummary) -> Dict[str, float]:
     return dict(q)
 
 
-class RelistenRetriever(BaseRetriever):
-    """Свои треки пользователя: score = совпадение с запросом (0..1) + history_weight * вес в истории (0..1).
-    Совпадение считает локальный BM25-индекс по тегам, жанрам, артисту, году, стране и языку трека."""
-    name = "relisten"
+class BM25Retriever(BaseRetriever):
+    """Топ треков каталога по BM25 карточки (поля с весами weights)."""
+    name = "bm25"
 
-    def __init__(self, catalog: Catalog, index: BM25Index, top_k: int = 100, history_weight: float = 0.3,
-                 recency_decay: float = 0.995):
+    def __init__(self, catalog: Catalog, index: CardIndex, top_k: int = 200,
+                 weights: Optional[Dict[str, float]] = None):
         super().__init__(catalog, top_k)
         self.index = index
+        self.weights = weights
+
+    def search(self, ctx: Context, top_k: Optional[int] = None) -> List[Candidate]:
+        q = query_terms(ctx.summary)
+        if not q:
+            return []
+        pos, scores = self.index.search(q, top_k or self.top_k, exclude=self.catalog.positions(ctx.banned_ids),
+                                        weights=self.weights)
+        return self.to_candidates(pos, scores)
+
+
+class RelistenRetriever(BaseRetriever):
+    """Свои треки пользователя: score = совпадение с запросом (0..1) + history_weight * вес в истории (0..1).
+    Совпадение — BM25 карточки (тот же индекс и веса полей, что у bm25), нормированный на лучший трек истории."""
+    name = "relisten"
+
+    def __init__(self, catalog: Catalog, index: CardIndex, top_k: int = 100, history_weight: float = 0.3,
+                 recency_decay: float = 0.995, weights: Optional[Dict[str, float]] = None):
+        super().__init__(catalog, top_k)
+        self.index = index
+        self.weights = weights
         self.history_weight = history_weight
         self.recency_decay = recency_decay
 
@@ -87,7 +110,7 @@ class RelistenRetriever(BaseRetriever):
         score = self.history_weight * hist / hist.max()
         q = query_terms(ctx.summary)
         if q:
-            match = self.index.scores(q)[pos]
+            match = self.index.scores(q, self.weights)[pos]
             if match.max() > 0:
                 score = score + match / match.max()
         k = min(top_k or self.top_k, len(pos))
@@ -146,26 +169,27 @@ class AudioRetriever(BaseRetriever):
 
 
 def build_retrievers(cfg: Dict[str, Any], catalog: Catalog,
-                     bm25_index: Optional[BM25Index] = None) -> List[BaseRetriever]:
-    """Источники из cfg['retrieval'] с enabled: true, в порядке конфига. bm25_index — готовый индекс для relisten,
-    чтобы не строить его заново (строится за секунды, но в ноутбуке пайплайн пересобирают часто)."""
-    from recsys.retrieval.remote import BM25APIRetriever, CandgenClient, HNSWAPIRetriever
+                     bm25_index: Optional[CardIndex] = None) -> List[BaseRetriever]:
+    """Источники из cfg['retrieval'] с enabled: true, в порядке конфига. bm25_index — готовый индекс карточек,
+    чтобы не загружать его заново (в ноутбуке и compare_configs пайплайн пересобирают часто)."""
+    from recsys.retrieval.remote import CandgenClient, HNSWAPIRetriever
 
+    enabled = {name: c for name, c in cfg.get("retrieval", {}).items() if c.get("enabled", False)}
+    weights = cfg.get("bm25_index", {}).get("weights")
+    if bm25_index is None and {"bm25", "relisten"} & set(enabled):
+        bm25_index = load_card_index(cfg, catalog)
     out: List[BaseRetriever] = []
-    for name, c in cfg.get("retrieval", {}).items():
-        if not c.get("enabled", False):
-            continue
+    for name, c in enabled.items():
         k = c.get("top_k", 200)
         if name == "relisten":
-            index = bm25_index or build_bm25_index(catalog, k1=c.get("k1", 1.2), b=c.get("b", 0.75))
-            out.append(RelistenRetriever(catalog, index, top_k=k, history_weight=c.get("history_weight", 0.3)))
+            out.append(RelistenRetriever(catalog, bm25_index, top_k=k, history_weight=c.get("history_weight", 0.3),
+                                         weights=weights))
         elif name == "audio":
             if catalog.embeddings is None:
                 raise ValueError("retrieval.audio: в каталоге нет эмбеддингов MuQ")
             out.append(AudioRetriever(catalog, top_k=k))
         elif name == "bm25":
-            out.append(BM25APIRetriever(name, catalog, CandgenClient.from_config(cfg, "bm25", c),
-                                        index=c.get("index", "cards"), top_k=k))
+            out.append(BM25Retriever(catalog, bm25_index, top_k=k, weights=weights))
         elif name == "hnsw":
             from recsys.retrieval.query_embedder import GemmaQueryEmbedder
             embedder = GemmaQueryEmbedder(**cfg.get("candgen", {}).get("hnsw", {}).get("embedder", {}))
