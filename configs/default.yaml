@@ -30,10 +30,12 @@ llm:
   torch_dtype: auto
   load_in_4bit: false
   stub_response: ""           # что отвечает StubLLM (пусто -> правила/шаблон)
-  gemma_service:               # для type: gemma_service — функция prompt -> ответ из модуля проекта DataSphere
-    path: /home/jupyter/project/llm_gemma_service
-    module: gemma_service
-    function: measure_request
+  gemma_service:               # код в этом репозитории; процесс и веса — вне него
+    path: ""                    # пакет импортируется из корня репозитория
+    module: llm_gemma_service.gemma_service
+    function: measure_chat
+    chat: true                  # сохранять роли system/user/assistant
+    timeout: 300                # ожидание ответа; холодный запуск отдельно до 900 секунд
 
 summarizer:
   type: rule                   # rule (заглушка) | llm (фолбэк на rule)

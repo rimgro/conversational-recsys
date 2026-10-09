@@ -28,8 +28,10 @@ jupyter lab inference.ipynb   # или открыть в DataSphere
 `train.parquet` / `test_public.parquet` (пользователи), `*_queries.parquet` (запросы), `*_qrels.parquet` (ответы).
 Синтетика в формате датасета (`data.source: synthetic`) нужна только тестам: они не зависят от файлов.
 В DataSphere: открыть ноутбук из корня репозитория. Описание выдачи от LLM-сервиса проекта — `USE_LLM_SERVICE = True`
-в `inference.ipynb` (`llm.type: gemma_service`, функция `gemma_service.measure_request`, путь в `configs/default.yaml`);
-локально сервиса нет, и ответ пишет шаблон. Своя модель в ноутбуке — `llm.type: local` (GPU и `transformers`).
+в `inference.ipynb` (подключает `configs/gemma.yaml`). Код запуска находится в [llm_gemma_service/](llm_gemma_service/README.md).
+Первичная настройка — `llm_gemma_service/gemma_datasphere_service.ipynb`; если сервер уже работает на той же ВМ,
+он используется повторно. Веса и процесс остаются вне репозитория, обновления pipeline не перезапускают LLM.
+Локально сервиса нет, и ответ пишет шаблон. Своя модель в ноутбуке — `llm.type: local` (GPU и `transformers`).
 
 ## Сервисы-кандгены
 

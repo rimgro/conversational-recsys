@@ -44,3 +44,13 @@ venv/
 # датасет Music4All-CRS и кэш каталога (docs/dataset.md)
 /music4all_crs/
 /cache/
+
+# runtime LLM хранится вне репозитория
+*.gguf
+/llm/
+/llm_gemma_service/build/
+/llm_gemma_service/weights/
+/llm_gemma_service/toolchain/
+/llm_gemma_service/*.log
+/llm_gemma_service/service-*.json
+/llm_gemma_service/service-*.lock

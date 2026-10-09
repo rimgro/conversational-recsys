@@ -2,12 +2,13 @@
 
 stub           -> StubLLM, ничего не загружает (саммари и описание падают на правила/шаблон)
 local          -> LocalLLM, открытая модель через transformers на GPU DataSphere
-gemma_service  -> GemmaServiceLLM, готовый сервис в DataSphere: функция prompt -> ответ из модуля проекта
-                  (по умолчанию gemma_service.measure_request из /home/jupyter/project/llm_gemma_service)
+gemma_service  -> GemmaServiceLLM, отдельный llama-server в DataSphere, клиент из llm_gemma_service/
+                  (готовый сервер используется повторно, веса не загружаются в pipeline)
 """
 from __future__ import annotations
 
 import importlib
+import inspect
 import json
 import re
 import sys
@@ -83,13 +84,20 @@ class LocalLLM(BaseLLM):
 
 
 class GemmaServiceLLM(BaseLLM):
-    """LLM-сервис DataSphere: function(prompt) из модуля module в папке path. Модуль импортируется при первом
-    вызове, поэтому локально (модуля нет) пайплайн работает: ошибка импорта -> шаг падает на шаблон/правила."""
+    """Ленивый клиент отдельного LLM-сервиса.
+
+    chat=True сохраняет роли сообщений. chat=False поддерживает старые
+    пользовательские функции function(prompt) из внешней папки path.
+    """
 
     TEXT_KEYS = ("text", "response", "answer", "output", "content", "generated_text", "result")
 
-    def __init__(self, path: str, module: str = "gemma_service", function: str = "measure_request"):
+    def __init__(self, path: str = "", module: str = "gemma_service", function: str = "measure_request",
+                 chat: bool = False, max_new_tokens: int = 512, temperature: float = 0.0,
+                 timeout: float = 300):
         self.path, self.module, self.function = path, module, function
+        self.chat = chat
+        self.max_new_tokens, self.temperature, self.timeout = max_new_tokens, temperature, timeout
         self._fn = None
 
     def _load(self):
@@ -117,8 +125,18 @@ class GemmaServiceLLM(BaseLLM):
         return ""
 
     def generate(self, messages, max_new_tokens=None) -> str:
-        prompt = messages if isinstance(messages, str) else "\n\n".join(m["content"] for m in messages)
-        return self._text(self._load()(prompt)).strip()
+        fn = self._load()
+        options = {"max_tokens": self.max_new_tokens if max_new_tokens is None else max_new_tokens,
+                   "temperature": self.temperature, "timeout": self.timeout}
+        if self.chat:
+            payload = [{"role": "user", "content": messages}] if isinstance(messages, str) else messages
+        else:
+            payload = messages if isinstance(messages, str) else "\n\n".join(m["content"] for m in messages)
+            # Legacy prompt-only functions may not accept generation options.
+            parameters = inspect.signature(fn).parameters
+            if not any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+                options = {k: v for k, v in options.items() if k in parameters}
+        return self._text(fn(payload, **options)).strip()
 
 
 def build_llm(cfg: Dict[str, Any]) -> BaseLLM:
@@ -137,8 +155,12 @@ def build_llm(cfg: Dict[str, Any]) -> BaseLLM:
         )
     if kind == "gemma_service":
         g = lcfg.get("gemma_service", {})
-        return GemmaServiceLLM(g.get("path", ""), module=g.get("module", "gemma_service"),
-                               function=g.get("function", "measure_request"))
+        return GemmaServiceLLM(
+            g.get("path", ""), module=g.get("module", "llm_gemma_service.gemma_service"),
+            function=g.get("function", "measure_chat"), chat=g.get("chat", True),
+            max_new_tokens=lcfg.get("max_new_tokens", 512), temperature=lcfg.get("temperature", 0.0),
+            timeout=g.get("timeout", 300),
+        )
     raise ValueError(f"Неизвестный llm.type: {kind}")
 
 

@@ -1,0 +1,6 @@
+# Подключение отдельного llama-server на той же GPU-ВМ DataSphere.
+# load_config(["configs/default.yaml", "configs/candgen.yaml", "configs/gemma.yaml"])
+llm:
+  type: gemma_service
+explainer:
+  type: llm
