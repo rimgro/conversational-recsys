@@ -46,7 +46,6 @@ jupyter lab inference.ipynb   # или открыть в DataSphere
 | `dev/bm25` | сервис BM25 (`POST /bm25/search`, индексы genres, tags, title) | развёрнут на сервере |
 | `fix/bm25-comma-split` | исправление сборки индексов BM25 (жанры через запятую) | ждёт слияния в `dev/bm25` |
 | `dev/hnsw`, релиз `hnsw-v1` | текстовый семантический поиск (EmbeddingGemma + LanceDB, `POST /hnsw/search`) | развёрнут на сервере |
-| `dev-ranker` | обучение ранкера LightGBM (признаки, `fit.py`) | модель v3 встроена здесь: `ranker.type: lgbm` |
 
 - `configs/candgen.yaml` включает источники `bm25_cards` и `hnsw` с сервера вместо локального `bm25`.
   Адреса и ключи — `BM25_URL`, `BM25_API_KEY`, `HNSW_URL`, `HNSW_API_KEY` (файл `.env` или секреты DataSphere).
@@ -149,13 +148,14 @@ recsys/
     history.py    история пользователя -> профиль вкуса
     synthetic.py  синтетика в формате датасета
     load.py       load_data(cfg): synthetic | crs
+ranker/           обучение ранкера: кандидаты, признаки на момент запроса, LightGBM (ranker/README.md)
 tests/
 ```
 
 ## Как заменить заглушку
 
 - **Ранкер**: `rank(features, ctx) -> DataFrame` с колонкой `rank_score`; признаки в `build_features` (`ranking.py`). Внешний сервис: `ranker.type: api`.
-- **Ранкер LightGBM** (`ranker.type: lgbm`, `configs/ranker_lgbm.yaml`): модель и таблицы в `ranker_assets/v3/` (~6 МБ), обучена в ветке `dev-ranker` на пуле `bm25_cards` + `hnsw` по 100 → RRF → top-200; конфиг включает ровно этот пул. На 20k запросов `test_public` nDCG@20 = 0.295 против 0.166 у порядка RRF (`ranker_assets/v3/report_test_public.csv`).
+- **Ранкер LightGBM** (`ranker.type: lgbm`, `configs/ranker_lgbm.yaml`): модель и таблицы в `ranker_assets/v3/` (~6 МБ), обучена кодом из `ranker/` (`ranker/README.md`) на пуле `bm25_cards` + `hnsw` по 100 → RRF → top-200; конфиг включает ровно этот пул. На 20k запросов `test_public` nDCG@20 = 0.295 против 0.166 у порядка RRF (`ranker_assets/v3/report_test_public.csv`).
 - **Новый источник кандидатов**: наследник `BaseRetriever` с `search(ctx) -> list[Candidate]` в `retrieval/`; зарегистрировать в `build_retrievers` (`retrieval/sources.py`) и включить в `configs/default.yaml`.
 - **LLM**: `llm.type: local`, `summarizer.type: llm`, `explainer.type: llm`.
 

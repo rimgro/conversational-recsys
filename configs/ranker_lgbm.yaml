@@ -1,7 +1,7 @@
 # Ранкер LightGBM (ranker_assets/v3) поверх того же пула, на котором он обучен:
 #   cfg = load_config(["configs/default.yaml", "configs/candgen.yaml", "configs/ranker_lgbm.yaml"])
 # bm25_cards + hnsw по 100 -> RRF k = 60 без весов -> top-200. Другой пул меняет rrf_score / n_sources,
-# и качество ранкера падает, пока его не переобучат на новом пуле (ветка dev-ranker, ranker/fit.py).
+# и качество ранкера падает, пока его не переобучат на новом пуле (ranker/README.md: make_candidates -> pit -> fit).
 retrieval:
   bm25:     {enabled: false}
   relisten: {enabled: false}

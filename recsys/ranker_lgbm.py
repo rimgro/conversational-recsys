@@ -1,6 +1,6 @@
 """LGBMRanker: обученный LightGBM LambdaRank поверх пула bm25_cards + hnsw (ranker.type: lgbm).
 
-Обучение — ветка dev-ranker (ranker/pit.py, ranker/fit.py); здесь только инференс для одного запроса.
+Обучение — пакет ranker/ (ranker/pit.py, ranker/fit.py, ranker/README.md); здесь только инференс для одного запроса.
 Признаки считаются так же, как ranker/pit.py в режиме test: срез истории на момент запроса без событий окна.
 
 Папка модели (ranker.model_dir):
