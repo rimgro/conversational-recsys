@@ -589,6 +589,47 @@ def tag_filter(include: Sequence[str], exclude: Sequence[str] = ()) -> str | Non
     return " AND ".join(clauses) if clauses else None
 
 
+def tag_filter_or(include: Sequence[str], exclude: Sequence[str] = ()) -> str | None:
+    if not include and not exclude:
+        return None
+    parts = []
+    if include:
+        parts.append("(" + " OR ".join(f"extracted_tags LIKE '%|{t}|%'" for t in include) + ")")
+    parts += [f"extracted_tags NOT LIKE '%|{t}|%'" for t in exclude]
+    return " AND ".join(parts)
+
+
+def _tag_overlap(extracted: str, include: Sequence[str]) -> int:
+    s = str(extracted or "")
+    return sum(1 for t in include if f"|{t}|" in s)
+
+
+def search_hybrid_v2(
+    table: Any, query_vec: "Any", include: Sequence[str], exclude: Sequence[str], k: int,
+    *, mode: str = "and", alpha: float = 0.05, nprobes: int = 200,
+) -> list[dict[str, Any]]:
+    """Prefilter modes: 'and' (strict), 'or' (any tag), 'soft' (ANN + tag boost)."""
+    import numpy as np
+
+    if mode == "soft":
+        cand = search_vector(table, query_vec, max(k * 10, 200), nprobes=nprobes)
+        for r in cand:
+            r["score"] = float(r.get("score", 0.0)) + alpha * _tag_overlap(r.get("extracted_tags", ""), include)
+        cand.sort(key=lambda r: -r["score"])
+        return cand[:k]
+    where = tag_filter(include, exclude) if mode == "and" else tag_filter_or(include, exclude)
+    if not where:
+        return search_vector(table, query_vec, k, nprobes=nprobes)
+    q = np.asarray(query_vec, dtype="float32").reshape(-1)
+    rows = (table.search(q, vector_column_name="vector_combined")
+            .where(where).metric("cosine").limit(k).to_list())
+    for r in rows:
+        r["score"] = 1.0 - float(r.pop("_distance", 0.0))
+    if not rows:
+        return search_vector(table, query_vec, k, nprobes=nprobes)
+    return rows[:k]
+
+
 def search_vector(table: Any, query_vec: "Any", k: int, *, nprobes: int = 200) -> list[dict[str, Any]]:
     import numpy as np
 
