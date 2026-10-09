@@ -21,6 +21,9 @@ pytest -q                 # тесты, пайплайн целиком на с�
 jupyter lab inference.ipynb   # или открыть в DataSphere
 ```
 
+Вектор запроса для HNSW строим сами (EmbeddingGemma-2, GPU если есть, иначе CPU): один раз на машину
+`python make_embed.py` — проверит пакеты, скачает веса, построит вектор и сверит его с индексом на сервере.
+
 С сервисами на сервере: задать `BM25_URL`, `BM25_API_KEY`, `HNSW_URL`, `HNSW_API_KEY` (файл `.env` в корне — он не в git —
 или секреты DataSphere) и поставить в ноутбуке `USE_CANDGEN = True`.
 
@@ -115,6 +118,7 @@ python evaluate.py --set ranker.type=heuristic      # любой парамет�
 ```
 inference.ipynb            инференс: запрос -> ответ
 evaluate.py                валидация: метрики на test_public -> outputs/
+make_embed.py              подготовка вектора запроса для HNSW: пакеты, веса EmbeddingGemma, проверка (GPU или CPU)
 jobs/evaluate.yaml         то же в DataSphere Jobs
 experiments.ipynb          эксперименты: разбор по шагам, сравнение вариантов
 configs/default.yaml       все параметры и переключатели

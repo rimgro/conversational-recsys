@@ -139,3 +139,22 @@ def test_gemma_service_llm(tmp_path, cfg, data):
     assert isinstance(pipe.explainer, LLMExplainer) and pipe.run(data.requests[0]).text.startswith("Enjoy!")
     missing = GemmaServiceLLM(str(tmp_path), module="no_such_service")
     assert Pipeline.from_config(c, data.catalog, llm=missing).run(data.requests[0]).text.startswith("Hi!")
+
+
+def test_query_embedder_device_and_cache(tmp_path, monkeypatch):
+    from recsys.retrieval import query_embedder as qe
+    assert qe.pick_device(None, None, cuda_available=True) == ("cuda", "float16")
+    assert qe.pick_device(None, None, cuda_available=False) == ("cpu", None)       # CPU — float32
+    assert qe.pick_device("cpu", None, cuda_available=True) == ("cpu", None)       # явное из конфига важнее
+    assert qe.pick_device("cuda", "float32", cuda_available=True) == ("cuda", "float32")
+    monkeypatch.delenv("HF_HOME", raising=False)
+    monkeypatch.setattr(qe, "DATASPHERE_PROJECT", str(tmp_path))                  # «как в DataSphere»
+    assert qe.setup_cache() == str(tmp_path / "hf_cache")
+    monkeypatch.setenv("HF_HOME", "/somewhere")                                    # заданный явно не трогаем
+    assert qe.setup_cache() == "/somewhere"
+
+
+def test_make_embed_stops_with_instructions(capsys, monkeypatch):
+    import make_embed
+    monkeypatch.setattr(make_embed, "check_packages", lambda: False)
+    assert make_embed.main(["--no-server"]) == 1
