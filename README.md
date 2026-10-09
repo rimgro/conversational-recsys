@@ -43,7 +43,7 @@ jupyter lab inference.ipynb   # или открыть в DataSphere
 | `dev/hnsw`, релиз `hnsw-v1` | текстовый семантический поиск (EmbeddingGemma + LanceDB, `POST /hnsw/search`) | развёрнут на сервере |
 | `dev-ranker` | ранкер LightGBM | в разработке |
 
-- `configs/candgen.yaml` включает источники `bm25_genres`, `bm25_tags` и `hnsw` с сервера вместо локального `bm25`.
+- `configs/candgen.yaml` включает источники `bm25_cards` и `hnsw` с сервера вместо локального `bm25`.
   Адреса и ключи — `BM25_URL`, `BM25_API_KEY`, `HNSW_URL`, `HNSW_API_KEY` (файл `.env` или секреты DataSphere).
   Без неё всё считается локально, так что ноутбуки работают и без сервера.
 - Если сервис недоступен, его источники возвращают пустой список с предупреждением, остальные работают.
@@ -103,7 +103,7 @@ python evaluate.py --set ranker.type=heuristic      # любой парамет�
 | `history` | новые треки по профилю тегов и артистов | novelty, `is_new` |
 | `audio` | эмбеддинги MuQ, ближайшие к треку-образцу (similar_to) или к центру вкуса | similar_to, audio_attributes |
 | `popular` | популярное в жанрах пользователя | холодный старт |
-| `bm25_genres`, `bm25_tags`, `bm25_title` | BM25 с сервера (`type: bm25_api`); `bm25_title` ждёт индекса title | как `bm25` / `title` |
+| `bm25_cards` | BM25 с сервера по всей карточке трека (`type: bm25_api`, индекс `cards`) | как `bm25` |
 | `hnsw` | текстовый семантический поиск с сервера: вектор реплики строим сами (EmbeddingGemma), сервис принимает только вектор; без модели источник пропускается | exact, lyrics_recall, vague_recall |
 
 Контракты между шагами: `recsys/schemas.py` (`Request`, `DialogSummary`, `Candidate`, `FusedCandidate`, `RankedTrack`, `Response`).

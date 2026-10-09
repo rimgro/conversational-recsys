@@ -5,7 +5,5 @@
 # и поиск по аудио-эмбеддингам MuQ (audio).
 retrieval:
   bm25: {enabled: false}
-  bm25_genres: {enabled: true}
-  bm25_tags: {enabled: true}
-  bm25_title: {enabled: false}   # индекса title на сервере пока нет; артист + название ищет локальный title
+  bm25_cards: {enabled: true}    # на сервере один индекс cards: вся карточка трека (жанры, теги, название, ...)
   hnsw: {enabled: true}

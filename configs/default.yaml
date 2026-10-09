@@ -63,9 +63,7 @@ retrieval:                     # enabled: false выключает источн�
   audio:    {enabled: true, top_k: 200}                        # эмбеддинги MuQ
   popular:  {enabled: true, top_k: 100}
   # сервисы на сервере (recsys/retrieval/remote.py), адреса в candgen.bm25 / candgen.hnsw
-  bm25_genres: {enabled: false, type: bm25_api, index: genres, query: tags, top_k: 200}
-  bm25_tags:   {enabled: false, type: bm25_api, index: tags, query: tags, top_k: 200}
-  bm25_title:  {enabled: false, type: bm25_api, index: title, query: title, top_k: 50}
+  bm25_cards:  {enabled: false, type: bm25_api, index: cards, query: tags, top_k: 200}   # вся карточка трека
   hnsw:        {enabled: false, type: hnsw_api, top_k: 200}       # запрос как есть -> EmbeddingGemma + LanceDB
 
 fusion:
@@ -73,7 +71,7 @@ fusion:
   top_n: 500                   # сколько отдаём в ранкер
   exclude_listened: false      # 93% целей в датасете — повторные прослушивания, их нельзя выкидывать
   weights: {bm25: 1.0, relisten: 1.0, title: 1.5, lyrics: 1.5, history: 0.5, audio: 0.5, popular: 0.2,
-            bm25_genres: 0.7, bm25_tags: 0.7, bm25_title: 1.0, hnsw: 1.0}
+            bm25_cards: 1.0, hnsw: 1.0}
   no_query_boost: {relisten: 1.5, history: 2.0, audio: 1.5, popular: 1.5}   # запрос пустой («ещё»)
   cold_start_boost: {popular: 2.0}                                         # истории нет
 

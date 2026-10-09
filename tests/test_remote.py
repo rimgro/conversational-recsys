@@ -43,17 +43,17 @@ class _FakeEmbedder:
 @pytest.fixture
 def fake_bm25(data):
     """Поддельные BM25 и HNSW по контракту (оба пути на одном порту): запоминают запросы, отвечают треками каталога.
-    Первое соединение к индексу tags обрывается без ответа — клиент должен повторить."""
+    Первое соединение к /bm25/search обрывается без ответа — клиент должен повторить."""
     calls, dropped = [], []
     ids = [str(t) for t in data.catalog.track_ids[:50]]
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            self._send({"status": "ok", "indexes": {"genres": {"index_version": "test", "n_items": 50}}})
+            self._send({"status": "ok", "indexes": {"cards": {"index_version": "test", "n_items": 50}}})
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            if body.get("index") == "tags" and not dropped:
+            if self.path == "/bm25/search" and not dropped:
                 dropped.append(1)
                 self.close_connection = True
                 return
@@ -84,7 +84,7 @@ def test_pipeline_calls_services(cfg, data, fake_bm25, monkeypatch):
     monkeypatch.setenv("HNSW_API_KEY", "h456")
     pipe = Pipeline.from_config(_api_cfg(cfg, url), data.catalog)
     names = {r.name for r in pipe.retrievers}
-    assert {"bm25_genres", "bm25_tags", "hnsw", "audio", "relisten"} <= names and "bm25" not in names
+    assert {"bm25_cards", "hnsw", "audio", "relisten"} <= names and "bm25" not in names
     hnsw = next(r for r in pipe.retrievers if r.name == "hnsw")
     hnsw.embedder = _FakeEmbedder()  # настоящую модель в тестах не грузим
     req = Request(dialog=[Message("user", "calm jazz, but not heavy metal")], history=data.requests[0].history,
@@ -92,7 +92,7 @@ def test_pipeline_calls_services(cfg, data, fake_bm25, monkeypatch):
     resp = pipe.run(req, debug=True)
 
     by_index = {b.get("index"): (path, b, h) for path, b, h in calls}
-    path, body, headers = by_index["genres"]
+    path, body, headers = by_index["cards"]
     assert path == "/bm25/search" and "jazz" in body["words"] and "heavy" not in body["words"]
     assert body["exclude_ids"] == [str(data.catalog.track_ids[0])]
     assert headers.get("X-Api-Key") == "k123"
@@ -100,8 +100,8 @@ def test_pipeline_calls_services(cfg, data, fake_bm25, monkeypatch):
     assert path == "/hnsw/search" and len(body["vector"]) == 768 and "query" not in body and "index" not in body
     assert hnsw.embedder.texts == ["calm jazz, but not heavy metal"]
     assert body["exclude_ids"] == [str(data.catalog.track_ids[0])] and headers.get("X-Api-Key") == "h456"
-    assert len(resp.debug["candidates"]["bm25_tags"]) == 49 and resp.tracks  # tags ответил после повтора
-    bm25 = next(r for r in pipe.retrievers if r.name == "bm25_genres")
+    assert len(resp.debug["candidates"]["bm25_cards"]) == 49 and resp.tracks  # BM25 ответил после повтора
+    bm25 = next(r for r in pipe.retrievers if r.name == "bm25_cards")
     assert bm25.last_error is None
     assert bm25.health() == {"url": url, "status": "ok", "index_version": "test", "n_items": 50}
 

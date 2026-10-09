@@ -4,7 +4,7 @@
 Тот же интерфейс, что у локальных источников: search(ctx) -> [Candidate]. Ошибка сети / сервиса ->
 пустой список, предупреждение и last_error (пайплайн не падает, остальные источники работают).
 
-  bm25_api   POST /bm25/search  слова из саммари -> индекс genres / tags / title     (candgen.bm25)
+  bm25_api   POST /bm25/search  слова из саммари -> индекс cards (вся карточка трека)  (candgen.bm25)
   hnsw_api   POST /hnsw/search  вектор последней реплики (EmbeddingGemma, строим сами) -> LanceDB  (candgen.hnsw);
                                 сервис принимает только vector: без модели источник пропускается
 
@@ -160,7 +160,7 @@ class BM25APIRetriever(_RemoteRetriever):
     health_path = "/health"
     MAX_WORDS = 256
 
-    def __init__(self, name: str, catalog: Catalog, client: CandgenClient, index: str = "genres",
+    def __init__(self, name: str, catalog: Catalog, client: CandgenClient, index: str = "cards",
                  top_k: int = 200, query: str = "tags"):
         super().__init__(name, catalog, client, index, top_k)
         if query not in ("tags", "title"):

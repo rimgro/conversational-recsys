@@ -5,7 +5,7 @@
 
 | Сервис | Код | Сейчас |
 |---|---|---|
-| BM25 | ветка `dev/bm25` | развёрнут на сервере, адрес и ключ — `BM25_URL`, `BM25_API_KEY` |
+| BM25 | ветка `bm25-cards` (релиз v1.3) | развёрнут на сервере, адрес и ключ — `BM25_URL`, `BM25_API_KEY` |
 | HNSW (текстовый поиск, EmbeddingGemma + LanceDB) | ветка `dev/hnsw`, релиз `hnsw-v1` | развёрнут на сервере, адрес и ключ — `HNSW_URL`, `HNSW_API_KEY` |
 
 Поиск по аудио-эмбеддингам MuQ сервиса не требует: его считает наш источник `audio`.
@@ -16,7 +16,7 @@
 ## BM25 — `POST /bm25/search`
 
 ```json
-{"words": ["rock", "indie"], "k": 200, "exclude_ids": ["..."], "index": "genres"}
+{"words": ["rock", "indie"], "k": 200, "exclude_ids": ["..."], "index": "cards"}
 ```
 
 | Поле | Тип | |
@@ -24,11 +24,11 @@
 | `words` | список строк, до 256 | слова запроса (английские теги, латиница), регистр не важен |
 | `k` | 1..1000 | сколько треков вернуть |
 | `exclude_ids` | список строк, до 100 000 | не возвращать эти треки |
-| `index` | `genres` (по умолчанию), `tags`, `title` | по какому полю искать; на сервере сейчас есть `genres` и `tags` |
+| `index` | `cards` (по умолчанию) | индекс по всей карточке трека; `genres` и `tags` — старые имена того же индекса |
 
-Ответ: `{"ids": [...], "scores": [...], "index": "genres", "index_version": "..."}`, по убыванию `scores`.
+Ответ: `{"ids": [...], "scores": [...], "index": "cards", "index_version": "..."}`, по убыванию `scores`.
 
-`GET /health` → `{"status": "ok", "default_index": "genres", "indexes": {"<имя>": {"index_version", "n_items", ...}}}`.
+`GET /health` → `{"status": "ok", "default_index": "cards", "indexes": {"<имя>": {"index_version", "n_items", ...}}}`.
 
 ## HNSW — `POST /hnsw/search`
 

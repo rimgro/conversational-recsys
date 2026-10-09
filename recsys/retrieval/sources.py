@@ -262,7 +262,7 @@ def build_retrievers(cfg: Dict[str, Any], catalog: Catalog,
     """Источники из cfg['retrieval'] с enabled: true, в порядке конфига.
 
     Тип источника — поле type (по умолчанию = имя), так можно завести несколько источников
-    одного типа: bm25_genres, bm25_tags (type: bm25_api) и т.д. Удалённые типы: recsys/retrieval/remote.py.
+    одного типа (type: bm25_api и т.п.). Удалённые типы: recsys/retrieval/remote.py.
     """
     from recsys.retrieval.remote import BM25APIRetriever, CandgenClient, HNSWAPIRetriever
 
@@ -277,7 +277,7 @@ def build_retrievers(cfg: Dict[str, Any], catalog: Catalog,
         k = c.get("top_k", 200)
         kind = kinds[name]
         if kind == "bm25_api":
-            out.append(BM25APIRetriever(name, catalog, CandgenClient.from_config(cfg, "bm25", c), index=c.get("index", "genres"),
+            out.append(BM25APIRetriever(name, catalog, CandgenClient.from_config(cfg, "bm25", c), index=c.get("index", "cards"),
                                         top_k=k, query=c.get("query", "tags")))
         elif kind == "hnsw_api":
             from recsys.retrieval.query_embedder import GemmaQueryEmbedder
