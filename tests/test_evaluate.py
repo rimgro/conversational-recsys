@@ -39,3 +39,22 @@ def test_evaluate_stops_when_candgen_down(tmp_path):
                           "--set", f"candgen.bm25.url={url}", "--set", f"candgen.hnsw.url={url}",
                           "--set", "candgen.timeout=0.5"])
     assert code == 2 and not (tmp_path / "run").exists()
+
+
+def test_evaluate_candgen_writes_results(tmp_path):
+    import evaluate_candgen
+    import pandas as pd
+    out = tmp_path / "run"
+    code = evaluate_candgen.main(["--synthetic", "--n-users", "20", "--max-queries", "2", "--run-dir", str(out),
+                                  "--chunk", "15", "--sources", "bm25,relisten,audio"])
+    assert code == 0
+    assert {"candgen.csv", "candgen_by_query_type.csv", "recall_by_query_type.csv", "ndcg_by_query_type.csv",
+            "filter_losses.csv", "per_list.csv", "metrics.json", "config.yaml"} <= {p.name for p in out.iterdir()}
+    s = pd.read_csv(out / "candgen.csv", index_col=0)
+    assert list(s.index) == ["bm25", "relisten", "audio", "rrf", "filtered", "fused"]  # только выбранные источники
+    assert (s["recall@20"] <= s["recall@100"]).all() and (s["recall@100"] <= s["recall"] + 1e-9).all()
+    # rrf объединяет источники: нашёл цель хоть один источник — она в rrf; фильтры и top_n только убирают
+    assert s.loc["rrf", "recall"] >= s.loc[["bm25", "relisten", "audio"], "recall"].max()
+    assert s.loc["rrf", "recall"] >= s.loc["filtered", "recall"] >= s.loc["fused", "recall"]
+    m = json.loads((out / "metrics.json").read_text(encoding="utf-8"))
+    assert m["sources"] == ["bm25", "relisten", "audio"] and 20 <= m["n_requests"] <= 40

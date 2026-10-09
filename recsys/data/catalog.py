@@ -57,6 +57,7 @@ class Catalog:
         self.df = df.reset_index(drop=True)
         self._pos: Dict[str, int] = {tid: i for i, tid in enumerate(self.df["track_id"])}
         self._tag_index: Optional[Dict[str, np.ndarray]] = None
+        self._columns: Dict[str, np.ndarray] = {}
         self._artist_index: Optional[Dict[str, str]] = None
 
     # ------------------------------------------------------------ доступ
@@ -92,6 +93,22 @@ class Catalog:
     def artist(self, track_id: str) -> str:
         p = self.pos(track_id)
         return "" if p is None else self.df.at[p, "artist"]
+
+    def numeric(self, col: str) -> np.ndarray:
+        """Колонка числами (float, NaN — нет значения или колонки), по позициям; считается один раз."""
+        key = "num:" + col
+        if key not in self._columns:
+            self._columns[key] = (pd.to_numeric(self.df[col], errors="coerce").to_numpy(dtype=np.float64)
+                                  if col in self.df else np.full(len(self.df), np.nan))
+        return self._columns[key]
+
+    def text(self, col: str) -> np.ndarray:
+        """Колонка строками ('' — нет значения или колонки), по позициям; считается один раз."""
+        key = "str:" + col
+        if key not in self._columns:
+            self._columns[key] = (self.df[col].fillna("").astype(str).to_numpy() if col in self.df
+                                  else np.full(len(self.df), "", dtype=object))
+        return self._columns[key]
 
     def get(self, track_ids: Iterable[str]) -> pd.DataFrame:
         return self.df.iloc[self.positions(track_ids)]

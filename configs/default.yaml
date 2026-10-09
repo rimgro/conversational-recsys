@@ -72,6 +72,12 @@ fusion:
   rrf_k: 60
   top_n: 500                   # сколько отдаём в ранкер
   exclude_listened: false      # 93% целей в датасете — повторные прослушивания, их нельзя выкидывать
+  exclude_top_tags: 3          # «no pop»: выкидывать трек, только если тег среди первых N его тегов по весу;
+                               # 0 — с любым таким тегом или жанром (теряло цель в 0.4% запросов train)
+  constraints:                 # ограничения запроса: год, тональность, bpm, энергия, instrumental, пол вокала, язык
+    use: [year, mode, bpm, energy, instrumental, vocals, lang]   # [] — выкл; country хуже (цель ей верна в ~80%)
+    penalty: 1.0               # вычитается из RRF за каждое нарушение (RRF ~0.01–0.1): нарушители уходят вниз
+    hard: false                # true — выкидывать нарушителей (на train хуже: теряет цель в 1.1% запросов)
   weights: {bm25: 1.0, relisten: 1.0, title: 1.5, lyrics: 1.5, history: 0.5, audio: 0.5, popular: 0.2,
             bm25_cards: 1.0, hnsw: 1.0}
   no_query_boost: {relisten: 1.5, history: 2.0, audio: 1.5, popular: 1.5}   # запрос пустой («ещё»)

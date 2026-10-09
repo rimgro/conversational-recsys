@@ -92,6 +92,79 @@ def evaluate(pipeline: Pipeline, requests: List[Request], k: int = 20, verbose: 
     return df, metrics.mean(numeric_only=True) if len(df) else pd.Series(dtype=float)
 
 
+STAGES = ["rrf", "filtered", "fused"]   # все источники вместе: до фильтров, после, первые top_n (вход ранкера)
+CANDGEN_KS = (20, 50, 100, 200)
+
+
+def evaluate_candidates(pipeline: Pipeline, requests: List[Request], k: int = 20) -> pd.DataFrame:
+    """Шаги 1–3 без ранкера: строка = запрос × список (каждый источник и этапы STAGES).
+
+    rank — место цели в списке так, как его видит метрика (без образца и артиста similar_to), 1 = первое;
+    NaN — цели нет. ndcg@k — если бы выдачей был этот список как есть. filter — какой фильтр выкинул цель
+    (только у строки filtered: banned / exclude_artist / exclude_tag / ... или constraint при fusion.constraints.hard;
+    пусто — не выкидывали или её не нашли).
+    """
+    from recsys.fusion import Filters
+
+    rows: List[Dict[str, Any]] = []
+    for req in requests:
+        if not req.target_ids:
+            continue
+        r = pipeline.retrieve(req)
+        targets = set(req.target_ids)
+        base = {"request_id": req.request_id, "query_type": req.meta.get("query_type"), "is_new": req.meta.get("is_new")}
+        lists = {src: [c.track_id for c in cands] for src, cands in r.candidates.items()}
+        lists.update(rrf=[f.track_id for f in r.merged], filtered=[f.track_id for f in r.filtered],
+                     fused=[f.track_id for f in r.fused])
+        reason = None
+        if any(t in targets for t in lists["rrf"]) and not any(t in targets for t in lists["filtered"]):
+            f = Filters(r.ctx, pipeline.catalog, pipeline.cfg.get("fusion", {}).get("exclude_top_tags", 0))
+            reason = next((f.reason(t) or "constraint" for t in req.target_ids if t in lists["rrf"]), None)
+        for name, ids in lists.items():
+            rec = scored_ids(ids, req, pipeline.catalog)
+            rank = next((i for i, t in enumerate(rec, start=1) if t in targets), float("nan"))
+            rows.append({**base, "list": name, "is_source": name not in STAGES, "n": len(ids), "rank": rank,
+                         f"ndcg@{k}": ndcg_at_k(rec, targets, k),
+                         "filter": reason if name == "filtered" else None})
+    return pd.DataFrame(rows)
+
+
+def candidates_summary(per: pd.DataFrame, by: Optional[str] = None, ks: Sequence[int] = CANDGEN_KS,
+                       k: int = 20) -> pd.DataFrame:
+    """Сводка evaluate_candidates. by=None: строка = список (источник / этап); иначе строка = (by, список).
+
+    recall@N — цель в первых N списка; recall — где угодно в списке; only_this — цель нашёл только этот
+    источник; median_rank — место цели, когда нашли; empty — доля запросов, где список пуст.
+    """
+    df = per.assign(found=per["rank"].notna())
+    for n in ks:
+        df[f"recall@{n}"] = df["rank"] <= n
+    src = df[df["is_source"]]
+    n_found = src.groupby("request_id")["found"].transform("sum")
+    df["only_this"] = float("nan")
+    df.loc[src.index, "only_this"] = (src["found"] & (n_found == 1)).astype(float)
+    df["empty"] = df["n"] == 0
+    keys = ([by] if by else []) + ["list"]
+    agg = df.groupby(keys, sort=False).agg(
+        n_requests=("request_id", "size"),
+        recall=("found", "mean"),
+        **{f"recall@{n}": (f"recall@{n}", "mean") for n in ks},
+        **{f"ndcg@{k}": (f"ndcg@{k}", "mean")},
+        only_this=("only_this", "mean"),
+        median_rank=("rank", "median"),
+        mean_candidates=("n", "mean"),
+        empty=("empty", "mean"),
+    )
+    return agg
+
+
+def filter_losses(per: pd.DataFrame, by: str = "query_type") -> pd.DataFrame:
+    """Доля запросов, где цель была среди кандидатов (rrf), но её выкинул фильтр, — по фильтрам и группам."""
+    f = per[per["list"] == "filtered"]
+    dummies = pd.get_dummies(f["filter"]).astype(float)  # пустые (None) не дают колонки
+    return pd.concat([dummies.groupby(f[by]).mean(), dummies.mean().to_frame("ALL").T])
+
+
 def sources_summary(per_request: pd.DataFrame) -> pd.DataFrame:
     """Строка = источник кандидатов. recall — доля запросов, где он нашёл цель; only_this — где цель нашёл
     только он (уникальный вклад); median_rank / share_top20 — где в его списке цель, когда найдена;

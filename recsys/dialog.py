@@ -18,7 +18,7 @@ from recsys.data.catalog import Catalog
 from recsys.llm import BaseLLM, extract_json
 from recsys.schemas import DialogSummary, Request, UserProfile
 from recsys.text import (COUNTRIES_EN, GENERIC_WORDS, LANGUAGE_CUES, LANGUAGES_EN, NEGATIONS, STOPWORDS,
-                         content_tokens, is_cyrillic, match_era, normalize_tag, split_clauses, tokenize)
+                         content_tokens, is_cyrillic, match_era, normalize_tag, parse_constraints, split_clauses, tokenize)
 
 
 class BaseSummarizer(ABC):
@@ -250,8 +250,10 @@ class RuleSummarizer(BaseSummarizer):
 
     def summarize(self, request: Request, profile: Optional[UserProfile] = None) -> DialogSummary:
         state = _new_state()
+        constraints: Dict[str, Any] = {}
         for text in request.user_messages:
             self._parse(text, state)
+            constraints.update(parse_constraints(text))  # позже сказанное перекрывает раннее
 
         # предпочтения из профиля пользователя: отдельно, чтобы не путать с текущим запросом
         info_state = _new_state()
@@ -293,6 +295,7 @@ class RuleSummarizer(BaseSummarizer):
             countries=list(state["countries"]),
             languages=list(state["languages"]),
             years=list(state["years"]),
+            constraints=constraints,
             user_tags=self._profile_tags(request.user_info, info_state),
             user_attrs={**self._user_attrs(request.user_info), **request.user_attrs},
             source="rule",

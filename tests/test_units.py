@@ -158,3 +158,50 @@ def test_make_embed_stops_with_instructions(capsys, monkeypatch):
     import make_embed
     monkeypatch.setattr(make_embed, "check_packages", lambda: False)
     assert make_embed.main(["--no-server"]) == 1
+
+
+def test_parse_constraints():
+    from recsys.text import parse_constraints
+    assert parse_constraints("recommend 2018 progressive rock, high energy but minor key") == \
+        {"year_min": 2017, "year_max": 2019, "energy_min": 0.5, "mode": 0}
+    assert parse_constraints("late 90s american pop punk") == {"year_min": 1995, "year_max": 2007}
+    assert parse_constraints("energetic alt rock around 120 bpm") == {"bpm": 120.0, "energy_min": 0.5}
+    assert parse_constraints("relaxing jazz without vocals") == {"instrumental": True}
+    assert parse_constraints("70s prog rock with male vocals")["vocals"] == "male"
+    # отрицания ограничений не дают: «not major» — не обязательно минор, «not too energetic» — не «low energy»
+    assert parse_constraints("danceable but not major key") == {}
+    assert parse_constraints("something upbeat but not too energetic") == {}
+    assert parse_constraints("music for a road trip") == {}
+
+
+def test_constraints_push_violators_down():
+    import pandas as pd
+    from recsys.data.catalog import Catalog
+    from recsys.fusion import apply_constraints, apply_filters, constraint_violations
+    from recsys.schemas import Context, DialogSummary, FusedCandidate, UserProfile
+    cat = Catalog(pd.DataFrame({
+        "track_id": ["a", "b", "c", "d"], "artist": ["A", "B", "C", "D"],
+        "tags": [["rock", "pop"], ["rock"], ["jazz"], ["rock"]],
+        "release_year": [1985, 2001, 1987, None], "mode": [1, 1, 0, 0], "tempo": [120.0, 60.0, 90.0, 125.0],
+        "energy": [0.8, 0.9, 0.2, 0.7], "artist_gender": ["Female", "Male", None, None],
+    }))
+    s = DialogSummary(constraints={"year_min": 1980, "year_max": 2000, "mode": 1, "bpm": 120.0, "vocals": "female"},
+                      exclude_tags=["pop"])
+    ctx = Context(Request(), s, UserProfile())
+    # b: год, bpm (60 — половина 120, это тот же бит) и пол вокала -> 2 нарушения; c: тональность и bpm; d: только тональность (год неизвестен — не нарушение)
+    assert list(constraint_violations(cat.positions("abcd"), ctx, cat)) == [0, 2, 2, 1]
+    fused = [FusedCandidate(t, score=1 / (60 + i)) for i, t in enumerate("dcba", start=1)]
+    out = apply_constraints(fused, ctx, cat, {"use": ["year", "mode", "bpm", "vocals"]})
+    assert [f.track_id for f in out] == ["a", "d", "c", "b"] and out[0].violations == 0
+    assert [f.track_id for f in apply_constraints(list(out), ctx, cat, {"use": ["year", "mode", "bpm", "vocals"],
+                                                                        "hard": True})] == ["a"]
+    assert apply_constraints(list(out), ctx, cat, {"use": []}) == out  # выключено — как было
+    # «no pop»: у a pop второй тег — выкидываем при exclude_top_tags >= 2, но не при 1
+    assert "a" not in [f.track_id for f in apply_filters(out, ctx, cat, exclude_top_tags=2)]
+    assert "a" in [f.track_id for f in apply_filters(out, ctx, cat, exclude_top_tags=1)]
+
+
+def test_rule_summarizer_fills_constraints(data):
+    s = RuleSummarizer(data.catalog).summarize(Request(dialog=[Message("user", "80s synthpop in a minor key"),
+                                                               Message("user", "actually make it major")]))
+    assert s.constraints["mode"] == 1 and s.constraints["year_min"] == 1980  # позже сказанное перекрывает

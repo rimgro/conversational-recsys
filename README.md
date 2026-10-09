@@ -76,6 +76,23 @@ python evaluate.py --set ranker.type=heuristic      # любой парамет�
 Короткие прогоны — из ноутбука (`!python evaluate.py ...`) или локально; полный — в DataSphere Jobs без открытого
 ноутбука: `datasphere project job execute -p <id проекта> -c jobs/evaluate.yaml` (что подготовить — в начале файла).
 
+### Кандгены отдельно (`evaluate_candgen.py`)
+
+Шаги 1–3 без ранкера и описания (локально ~170 запросов/с): каждый источник кандидатов и три этапа слияния —
+`rrf` (все источники до фильтров), `filtered` (после фильтров и ограничений запроса), `fused` (первые `fusion.top_n`,
+вход ранкера; его nDCG@20 — это выдача stub-ранкера).
+
+```bash
+python evaluate_candgen.py --n-users 1000                     # локальные источники
+python evaluate_candgen.py --n-users 1000 --candgen           # + BM25 и HNSW с сервера
+python evaluate_candgen.py --sources bm25,audio               # только эти источники
+python evaluate_candgen.py --split train --set fusion.exclude_top_tags=5   # подбирать параметры — на train
+```
+
+Результат — `outputs/<время>_<сплит>_candgen/`: `candgen.csv` (recall, recall@20/50/100/200, nDCG@20, only_this —
+цель нашёл только он, median_rank, сколько кандидатов), то же по типам запросов, `recall_by_query_type.csv` и
+`ndcg_by_query_type.csv` (тип запроса × список), `filter_losses.csv` (какой фильтр выкинул найденную цель).
+
 ## Что важно в данных
 
 - **Одна цель на запрос**, 13 типов (`query_type`): 11 к прослушанным трекам (exact, lyrics_recall, lyrics_theme,
@@ -93,9 +110,19 @@ python evaluate.py --set ranker.type=heuristic      # любой парамет�
 |---|---|---|
 | 1. разбор запроса → `DialogSummary` | `dialog.py` | правила (`rule`), `llm` с фолбэком на правила |
 | 2. кандидаты | `retrieval/sources.py` | см. ниже |
-| 3. RRF + фильтры + дедуп | `fusion.py` | настоящий |
+| 3. RRF + фильтры + ограничения запроса + дедуп | `fusion.py` | настоящий |
 | 4. ранкер | `ranking.py` | `stub` (порядок RRF), `heuristic`, `api` |
 | 5. описание | `explain.py` | `stub` (приветствие + список), `llm` |
+
+Фильтры и ограничения (шаг 3, `fusion.py`):
+
+- **жёсткие фильтры** (`Filters`): показанное и скипнутое; прослушанное — только для similar_to / novelty;
+  артисты из `exclude_artists`; для novelty — все артисты истории; `exclude_tags` («no pop») — только если тег среди
+  первых `fusion.exclude_top_tags` тегов трека по весу.
+- **ограничения запроса** (`fusion.constraints`): год / десятилетие, тональность, bpm, «high/low energy», instrumental,
+  пол вокала, явный язык (`text.parse_constraints`). Синтетические запросы пишутся по мете цели, и цель им удовлетворяет
+  в ~97% случаев (проверено на train), поэтому нарушители уходят вниз списка (штраф к RRF), но не выкидываются.
+  Страна артиста — нет: цель ей удовлетворяет в ~80%. Признак `n_violations` есть у ранкера.
 
 Источники кандидатов:
 
@@ -118,6 +145,7 @@ python evaluate.py --set ranker.type=heuristic      # любой парамет�
 ```
 inference.ipynb            инференс: запрос -> ответ
 evaluate.py                валидация: метрики на test_public -> outputs/
+evaluate_candgen.py        метрики кандгенов: каждый источник и этапы слияния, без ранкера
 make_embed.py              подготовка вектора запроса для HNSW: пакеты, веса EmbeddingGemma, проверка (GPU или CPU)
 jobs/evaluate.yaml         то же в DataSphere Jobs
 experiments.ipynb          эксперименты: разбор по шагам, сравнение вариантов
@@ -137,7 +165,7 @@ recsys/
     local_index.py  локальные индексы (BM25 по тегам, триграммы названий, тексты песен) — не сервис BM25
     sources.py    шаг 2: локальные источники кандидатов
     remote.py     шаг 2: источники с сервера по HTTP (bm25_api, hnsw_api)
-  fusion.py       шаг 3: RRF, фильтры, веса источников
+  fusion.py       шаг 3: RRF, фильтры, ограничения запроса, веса источников
   ranking.py      шаг 4: признаки, StubRanker, HeuristicRanker, APIRanker
   explain.py      шаг 5: StubExplainer, LLMExplainer (ответ по-английски)
   eval.py         nDCG@20 и др., evaluate, metrics_by, compare_configs

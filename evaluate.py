@@ -89,8 +89,8 @@ def build_config(a: argparse.Namespace):
     return load_config(files, over), files, over
 
 
-def main(argv=None) -> int:
-    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+def add_common_args(p: argparse.ArgumentParser) -> None:
+    """Аргументы, общие для evaluate.py и evaluate_candgen.py: данные, конфиг, куда писать."""
     p.add_argument("--split", default="test_public", help="сплит датасета (test_public, train)")
     p.add_argument("--data-dir", help="папка датасета (файлы целиком или частями); по умолчанию data.crs.dir")
     p.add_argument("--synthetic", action="store_true", help="синтетика вместо датасета")
@@ -104,6 +104,24 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="outputs", help="куда класть папку прогона")
     p.add_argument("--run-dir", help="точная папка результата вместо outputs/<время>_<сплит>")
     p.add_argument("--chunk", type=int, default=500, help="через сколько запросов дописывать результат")
+
+
+def check_candgen(pipe: Pipeline):
+    """/health удалённых источников -> (источники, ответы); ответы None, если какой-то сервис недоступен."""
+    remote = [r for r in pipe.retrievers if getattr(r, "remote", False)]
+    health = {r.name: r.health() for r in remote}
+    down = {name: h for name, h in health.items() if h.get("status") != "ok"}
+    for name, h in health.items():
+        print(f"[candgen] {name}: {h}")
+    if down:
+        print(f"сервисы недоступны: {sorted(down)}; проверьте адреса и ключи в .env (BM25_URL, HNSW_URL, ...)", file=sys.stderr)
+        return remote, None
+    return remote, health
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    add_common_args(p)
     a = p.parse_args(argv)
 
     started = datetime.now()
@@ -115,13 +133,8 @@ def main(argv=None) -> int:
         return 1
     pipe = Pipeline.from_config(cfg, data.catalog)
 
-    remote = [r for r in pipe.retrievers if getattr(r, "remote", False)]
-    health = {r.name: r.health() for r in remote}
-    down = {name: h for name, h in health.items() if h.get("status") != "ok"}
-    for name, h in health.items():
-        print(f"[candgen] {name}: {h}")
-    if down:
-        print(f"сервисы недоступны: {sorted(down)}; проверьте адреса и ключи в .env (BM25_URL, HNSW_URL, ...)", file=sys.stderr)
+    remote, health = check_candgen(pipe)
+    if health is None:
         return 2
 
     run_dir = Path(a.run_dir or Path(a.out) / f"{started:%Y%m%d_%H%M%S}_{a.split}")

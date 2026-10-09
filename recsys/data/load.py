@@ -1,6 +1,7 @@
 """Единая точка загрузки по конфигу: data.source = synthetic | crs."""
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 from dataclasses import dataclass, field
@@ -9,7 +10,7 @@ from typing import Any, Dict, List
 import pandas as pd
 
 from recsys.data.catalog import Catalog
-from recsys.data.crs import catalog_from_meta, read_split, read_tracks_meta, requests_from_tables, split_path
+from recsys.data.crs import EXTRA_COLUMNS, catalog_from_meta, read_split, read_tracks_meta, requests_from_tables, split_path
 from recsys.data.synthetic import make_synthetic
 from recsys.schemas import Request
 
@@ -61,7 +62,9 @@ def _crs_catalog(c: Dict[str, Any], dcfg: Dict[str, Any]) -> Catalog:
     src = split_path(c["dir"], "tracks_meta")
     st = os.stat(src)
     # ключ кэша зависит от исходного файла: новый tracks_meta не подхватит старый кэш
-    key = (f"{st.st_size}_{int(st.st_mtime)}_{dcfg.get('max_tags', 20)}"
+    # и от набора колонок: новая колонка в EXTRA_COLUMNS не должна молча взять кэш без неё
+    columns = hashlib.md5(",".join(EXTRA_COLUMNS).encode()).hexdigest()[:6]
+    key = (f"{st.st_size}_{int(st.st_mtime)}_{dcfg.get('max_tags', 20)}_{columns}"
            f"{'_lyrics' if with_lyrics else ''}")
     cache_dir = dcfg.get("cache_dir")
     cache = os.path.join(cache_dir, f"catalog_crs_{key}.parquet") if cache_dir else None

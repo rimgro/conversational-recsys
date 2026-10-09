@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -11,11 +12,23 @@ from recsys.data.catalog import Catalog
 from recsys.data.history import build_profile
 from recsys.dialog import BaseSummarizer, build_summarizer
 from recsys.explain import BaseExplainer, build_explainer
-from recsys.fusion import apply_filters, rrf, source_weights
+from recsys.fusion import apply_constraints, apply_filters, rrf, source_weights
 from recsys.llm import BaseLLM, StubLLM, build_llm
 from recsys.ranking import BaseRanker, build_features, build_ranker, cap_per_artist, reasons_for
 from recsys.retrieval import BaseRetriever, BM25Index, build_retrievers
-from recsys.schemas import Candidate, Context, RankedTrack, Request, Response
+from recsys.schemas import Candidate, Context, FusedCandidate, RankedTrack, Request, Response
+
+
+@dataclass
+class Retrieval:
+    """Шаги 1–3 пайплайна: что нашли источники и что из этого дошло до ранкера."""
+    ctx: Context
+    candidates: Dict[str, List[Candidate]]   # источник -> список
+    weights: Dict[str, float]                # веса источников в RRF для этого запроса
+    merged: List[FusedCandidate]             # RRF всех источников, до фильтров
+    filtered: List[FusedCandidate]           # после фильтров и ограничений запроса (apply_filters, apply_constraints)
+    fused: List[FusedCandidate]              # первые fusion.top_n: вход ранкера
+    timings: Dict[str, float]
 
 
 class Pipeline:
@@ -49,10 +62,10 @@ class Pipeline:
         """Общий BM25-индекс по тегам (у bm25 / relisten / history), чтобы не строить его заново."""
         return next((r.index for r in self.retrievers if r.name in ("bm25", "relisten", "history")), None)
 
-    def run(self, request: Request, debug: bool = False) -> Response:
+    def retrieve(self, request: Request) -> Retrieval:
+        """Шаги 1–3: разбор диалога, кандидаты, RRF + фильтры. Без ранкера и описания (метрики кандгенов)."""
         t: Dict[str, float] = {}
         fcfg = self.cfg.get("fusion", {})
-        top_k = self.cfg.get("ranker", {}).get("top_k", 10)
 
         # 1. разбор диалога
         t0 = time.perf_counter()
@@ -69,10 +82,18 @@ class Pipeline:
         # 3. RRF + фильтры + дедуп
         t0 = time.perf_counter()
         weights = source_weights(self.cfg, ctx)
-        fused = rrf(candidates, k=fcfg.get("rrf_k", 60), weights=weights)
-        fused = apply_filters(fused, ctx, self.catalog)
-        fused = fused[:fcfg.get("top_n", 500)]
+        merged = rrf(candidates, k=fcfg.get("rrf_k", 60), weights=weights)
+        filtered = apply_filters(merged, ctx, self.catalog, fcfg.get("exclude_top_tags", 0))
+        filtered = apply_constraints(filtered, ctx, self.catalog, fcfg.get("constraints", {}))
+        fused = filtered[:fcfg.get("top_n", 500)]
         t["3_fusion"] = time.perf_counter() - t0
+        return Retrieval(ctx, candidates, weights, merged, filtered, fused, t)
+
+    def run(self, request: Request, debug: bool = False) -> Response:
+        top_k = self.cfg.get("ranker", {}).get("top_k", 10)
+        r = self.retrieve(request)
+        ctx, candidates, fused, t = r.ctx, r.candidates, r.fused, r.timings
+        profile, summary, weights = ctx.profile, ctx.summary, r.weights
 
         # 4. ранкер
         t0 = time.perf_counter()

@@ -72,6 +72,8 @@ class DialogSummary:
     countries: List[str] = field(default_factory=list)   # коды стран артиста: US, GB, ...
     languages: List[str] = field(default_factory=list)   # язык текста: en, ru, ...
     years: List[int] = field(default_factory=list)       # конкретные годы релиза
+    constraints: Dict[str, Any] = field(default_factory=dict)  # почти жёсткие: годы, тональность, bpm, энергия,
+                                                               # instrumental, пол вокала (text.parse_constraints)
     user_tags: List[str] = field(default_factory=list)       # предпочтения из user_info
     user_attrs: Dict[str, Any] = field(default_factory=dict)  # age, gender, country
     source: str = "rule"                 # rule | llm | llm+rule
@@ -138,6 +140,7 @@ class FusedCandidate:
     score: float                                       # RRF
     ranks: Dict[str, int] = field(default_factory=dict)
     scores: Dict[str, float] = field(default_factory=dict)
+    violations: int = 0                                # сколько ограничений запроса нарушает (fusion.constraints)
 
 
 # ---------------------------------------------------------------- шаги 4–5: выдача

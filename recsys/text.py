@@ -126,3 +126,63 @@ def match_era(token: str) -> Tuple[Optional[str], Optional[int]]:
         return decade_tag(int(token)), int(token)
     m = _DECADE_RE.match(token)
     return (f"{m.group(2)}0s", None) if m else (None, None)
+
+
+# ---------------------------------------------------------------- ограничения запроса (fusion.constraints)
+
+# Синтетические запросы датасета пишутся по мете цели, поэтому «2018», «minor key», «120 bpm», «high energy» — почти
+# точные факты о ней. Границы подобраны на train так, чтобы цель им удовлетворяла в ~97% случаев: год выпуска
+# в tracks_meta — год релиза, у сборников и переизданий он позже, поэтому десятилетие открыто «вверх».
+DECADE_RANGES = {"": (0, 20), "early": (0, 13), "mid": (2, 9), "late": (5, 17)}  # смещения от начала десятилетия
+_DECADE_STARTS = {"50": 1950, "60": 1960, "70": 1970, "80": 1980, "90": 1990, "00": 2000, "10": 2010}
+_YEAR_RE = re.compile(r"\b(19[5-9][0-9]|20[0-2][0-9])\b")
+_DECADE_PHRASE_RE = re.compile(r"\b(early|mid|late)?[- ]?(?:19|20)?([5-9]0|00|10)'?s\b")
+_MODE_RE = re.compile(r"\b(major|minor)\b")
+_BPM_RE = re.compile(r"\b(\d{2,3})\s*bpm\b")
+_NO_VOCALS_RE = re.compile(r"\b(?:no|without)\s+(?:vocals?|words|lyrics|singing|voice)\b")
+_INSTRUMENTAL_WORD_RE = re.compile(r"\binstrumentals?\b")
+_HIGH_ENERGY_RE = re.compile(r"\bhigh[- ]energy\b|\benergetic\b")
+_LOW_ENERGY_RE = re.compile(r"\blow[- ]energy\b")
+_VOCALS_RE = re.compile(r"\b(female|male|woman|man|girl|boy)\s+(?:vocals?|vocalists?|singers?|voices?|leads?)\b")
+_VOCAL_GENDER = {"female": "female", "woman": "female", "girl": "female", "male": "male", "man": "male", "boy": "male"}
+
+
+def _negated(clause: str, start: int) -> bool:
+    """В части клаузы до совпадения есть отрицание: «but not major key», «not too energetic»."""
+    return any(t in NEGATIONS for t in tokenize(clause[:start]))
+
+
+def parse_constraints(text: str) -> dict:
+    """Почти жёсткие ограничения из реплики на английском -> {year_min, year_max, mode, bpm, energy_min,
+    energy_max, instrumental, vocals}. Отрицания ('not major') ограничений не дают: цель им удовлетворяет хуже."""
+    out: dict = {}
+    for clause in split_clauses(str(text).lower()):
+        m = _YEAR_RE.search(clause)
+        if m and not _negated(clause, m.start()):
+            y = int(m.group(1))
+            out.update(year_min=y - 1, year_max=y + 1)
+        elif "year_min" not in out:
+            m = _DECADE_PHRASE_RE.search(clause)
+            if m and not _negated(clause, m.start()):
+                lo, hi = DECADE_RANGES[m.group(1) or ""]
+                d = _DECADE_STARTS[m.group(2)]
+                out.update(year_min=d + lo, year_max=d + hi)
+        m = _MODE_RE.search(clause)
+        if m and not _negated(clause, m.start()):
+            out["mode"] = 1 if m.group(1) == "major" else 0
+        m = _BPM_RE.search(clause)
+        if m and not _negated(clause, m.start()):
+            out["bpm"] = float(m.group(1))
+        m = _NO_VOCALS_RE.search(clause) or _INSTRUMENTAL_WORD_RE.search(clause)
+        if m and (m.re is _NO_VOCALS_RE or not _negated(clause, m.start())):
+            out["instrumental"] = True
+        m = _HIGH_ENERGY_RE.search(clause)
+        if m and not _negated(clause, m.start()):
+            out["energy_min"] = 0.5
+        m = _LOW_ENERGY_RE.search(clause)
+        if m and not _negated(clause, m.start()):
+            out["energy_max"] = 0.6
+        m = _VOCALS_RE.search(clause)
+        if m and not _negated(clause, m.start()):
+            out["vocals"] = _VOCAL_GENDER[m.group(1)]
+    return out
