@@ -1,13 +1,11 @@
-"""Локальные индексы нашей части (не путать с сервисом BM25 из ветки dev/bm25): BM25 на scipy.sparse,
-64k треков строятся в памяти за секунды, без внешних зависимостей.
+"""Локальный BM25-индекс (не путать с сервисом BM25): по нему relisten ранжирует историю пользователя по запросу.
+BM25 на scipy.sparse, 64k треков строятся в памяти за секунды.
 
-build_bm25_index    документ трека: теги (повтор по весу), жанры, артист, название, альбом,
-                    десятилетие, страна, язык, инструментал. Виды токенов:
-                      слова           'indie', 'rock'        мягкое совпадение
-                      't:indie_rock'  тег целиком            'a:the_velvet_owls'  артист целиком
-                      'c:us' страна артиста, 'l:en' язык текста, 'y:1983' год релиза
-build_title_index   символьные триграммы «артист + название» (опечатки, транслит)
-build_lyrics_index  слова текста песни (поиск по строчке)
+Документ трека: теги (повтор по весу), жанры, артист, название, альбом, десятилетие, страна, язык, инструментал.
+Виды токенов:
+  слова           'indie', 'rock'        мягкое совпадение
+  't:indie_rock'  тег целиком            'a:the_velvet_owls'  артист целиком
+  'c:us' страна артиста, 'l:en' язык текста, 'y:1983' год релиза
 """
 from __future__ import annotations
 
@@ -44,15 +42,6 @@ def year_token(year: int) -> str:
 
 def index_words(text: str) -> List[str]:
     return [w for w in tokenize(text) if w not in STOPWORDS]
-
-
-def char_trigrams(text: str) -> List[str]:
-    """'kate bush' -> ['_ka', 'kat', 'ate', 'te_', '_bu', ...]: устойчиво к опечаткам и транслиту."""
-    out: List[str] = []
-    for w in tokenize(text):
-        w = f"_{w}_"
-        out.extend(w[i:i + 3] for i in range(len(w) - 2))
-    return out
 
 
 def _present(x) -> bool:
@@ -145,17 +134,4 @@ def build_bm25_index(catalog: Catalog, k1: float = 1.2, b: float = 0.75) -> BM25
     cols = ["tags", "tag_weights", "genres", "artist", "title"] + [c for c in optional if c in catalog.df]
     docs = (track_document(dict(zip(cols, vals))) for vals in zip(*(catalog.df[c] for c in cols)))
     return BM25Index(k1, b).fit(docs)
-
-
-def build_title_index(catalog: Catalog) -> BM25Index:
-    docs = (Counter(char_trigrams(f"{a} {t}")) for a, t in zip(catalog.df["artist"], catalog.df["title"]))
-    return BM25Index(k1=1.2, b=0.3).fit(docs)
-
-
-def build_lyrics_index(catalog: Catalog) -> Optional[BM25Index]:
-    """None, если в каталоге нет текстов (data.crs.with_lyrics: false)."""
-    if "lyrics" not in catalog.df:
-        return None
-    docs = (Counter(index_words(x)) if isinstance(x, str) else Counter() for x in catalog.df["lyrics"])
-    return BM25Index().fit(docs)
 

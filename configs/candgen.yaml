@@ -1,9 +1,0 @@
-# Надстройка над default.yaml: BM25 и текстовый HNSW берутся с сервера по HTTP.
-#   cfg = load_config(["configs/default.yaml", "configs/candgen.yaml"])
-# Адреса и ключи — BM25_URL, BM25_API_KEY, HNSW_URL, HNSW_API_KEY (файл .env или секреты проекта DataSphere).
-# Локально остаются источники, которым нужна история пользователя целиком (relisten, title, history, popular),
-# и поиск по аудио-эмбеддингам MuQ (audio).
-retrieval:
-  bm25: {enabled: false}
-  bm25_cards: {enabled: true}    # на сервере один индекс cards: вся карточка трека (жанры, теги, название, ...)
-  hnsw: {enabled: true}

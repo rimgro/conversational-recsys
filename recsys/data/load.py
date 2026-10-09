@@ -58,19 +58,17 @@ def load_data(cfg: Dict[str, Any], verbose: bool = True) -> DataBundle:
 
 def _crs_catalog(c: Dict[str, Any], dcfg: Dict[str, Any]) -> Catalog:
     """tracks_meta -> Catalog, с кэшем (parquet + эмбеддинги .npy) в data.cache_dir."""
-    with_lyrics = c.get("with_lyrics", False)
     src = split_path(c["dir"], "tracks_meta")
     st = os.stat(src)
     # ключ кэша зависит от исходного файла: новый tracks_meta не подхватит старый кэш
     # и от набора колонок: новая колонка в EXTRA_COLUMNS не должна молча взять кэш без неё
     columns = hashlib.md5(",".join(EXTRA_COLUMNS).encode()).hexdigest()[:6]
-    key = (f"{st.st_size}_{int(st.st_mtime)}_{dcfg.get('max_tags', 20)}_{columns}"
-           f"{'_lyrics' if with_lyrics else ''}")
+    key = f"{st.st_size}_{int(st.st_mtime)}_{dcfg.get('max_tags', 20)}_{columns}"
     cache_dir = dcfg.get("cache_dir")
     cache = os.path.join(cache_dir, f"catalog_crs_{key}.parquet") if cache_dir else None
     if cache and dcfg.get("use_cache", True) and os.path.exists(cache):
         return Catalog.load(cache)
-    meta = read_tracks_meta(src, with_lyrics=with_lyrics)
+    meta = read_tracks_meta(src)
     catalog = catalog_from_meta(meta, max_tags=dcfg.get("max_tags", 20))
     if cache:
         os.makedirs(cache_dir, exist_ok=True)

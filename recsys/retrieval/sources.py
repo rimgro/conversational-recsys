@@ -1,19 +1,16 @@
 """Шаг 2: источники кандидатов. Каждый: search(ctx) -> [Candidate], по убыванию score.
 
-bm25      запрос из саммари -> BM25 по тегам/жанрам/артисту/году/стране/языку
-relisten  треки из истории самого пользователя, по совпадению с запросом и весу в истории
-          (в датасете 93% целей — повторные прослушивания)
-title     артист + название по символьным триграммам, с транслитом кириллицы (запросы exact)
-lyrics    строчка текста песни (нужен data.crs.with_lyrics: true)
-history   профиль тегов и артистов из истории -> BM25 (новые треки во вкусе пользователя)
-audio     эмбеддинги MuQ: ближайшие к «центру вкуса» истории
-popular   популярное в жанрах пользователя; холодный старт
+Четыре источника, у каждого своя роль:
+  relisten  свои треки пользователя: совпадение с запросом + вес в истории (93% целей датасета — повторные
+            прослушивания, их ищет только он)
+  audio     эмбеддинги MuQ: похожие по звуку на трек-образец («like X by Y», similar_to) или на центр вкуса
+  bm25      сервис BM25 по карточке трека: слова запроса (remote.py)
+  hnsw      сервис HNSW: семантический поиск по вектору реплики (remote.py)
 
 Треки из ctx.banned_ids источники не возвращают, чтобы не тратить на них top_k.
 """
 from __future__ import annotations
 
-import warnings
 from abc import ABC, abstractmethod
 from collections import Counter
 from typing import Any, Dict, List, Optional
@@ -21,11 +18,9 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from recsys.data.catalog import Catalog
-from recsys.retrieval.local_index import (BM25Index, artist_token, build_bm25_index, build_lyrics_index,
-                                   build_title_index, char_trigrams, country_token, index_words, lang_token,
-                                   tag_token, year_token)
-from recsys.schemas import Candidate, Context
-from recsys.text import GENERIC_WORDS, STOPWORDS, tokenize
+from recsys.retrieval.local_index import (BM25Index, artist_token, build_bm25_index, country_token, index_words,
+                                          lang_token, tag_token, year_token)
+from recsys.schemas import Candidate, Context, DialogSummary
 
 
 class BaseRetriever(ABC):
@@ -45,61 +40,39 @@ class BaseRetriever(ABC):
                 for r, (p, s) in enumerate(zip(positions, scores), start=1)]
 
 
-class _BM25Source(BaseRetriever):
-    """Общее для источников поверх BM25: строим взвешенный запрос и ищем."""
-
-    def __init__(self, catalog: Catalog, index: BM25Index, top_k: int = 200):
-        super().__init__(catalog, top_k)
-        self.index = index
-
-    def build_query(self, ctx: Context) -> Dict[str, float]:
-        raise NotImplementedError
-
-    def search(self, ctx: Context, top_k: Optional[int] = None) -> List[Candidate]:
-        q = self.build_query(ctx)
-        if not q:
-            return []
-        exclude = self.catalog.positions(ctx.banned_ids)
-        pos, scores = self.index.search(q, top_k or self.top_k, exclude=exclude)
-        return self.to_candidates(pos, scores)
-
-
-class BM25Retriever(_BM25Source):
-    name = "bm25"
-
-    def build_query(self, ctx: Context) -> Dict[str, float]:
-        """Теги (фраза ×2 + слова), артисты-сиды (×3), слова query; слова исключений убираем."""
-        s = ctx.summary
-        q: Counter = Counter()
-        for tag in s.include_tags:
-            q[tag_token(tag)] += 2.0
-            for w in index_words(tag):
-                q[w] += 1.0
-        for a in s.seed_artists:
-            q[artist_token(a)] += 3.0
-        for w in index_words(s.query):
+def query_terms(s: DialogSummary) -> Dict[str, float]:
+    """Саммари -> взвешенные токены локального индекса (local_index.py): тег целиком ×2 и его слова, артисты ×3,
+    слова query, страна / язык / год; слова исключённых тегов убираем, если они не входят в желаемые
+    ('рок, но не хард-рок')."""
+    q: Counter = Counter()
+    for tag in s.include_tags:
+        q[tag_token(tag)] += 2.0
+        for w in index_words(tag):
             q[w] += 1.0
-        for c in s.countries:
-            q[country_token(c)] += 2.0
-        for lang in s.languages:
-            q[lang_token(lang)] += 2.0
-        for y in s.years:
-            q[year_token(y)] += 2.0
-        # слова исключённых тегов убираем, если они не входят в желаемые ('рок, но не хард-рок')
-        wanted = {w for t in s.include_tags for w in index_words(t)}
-        for w in {w for t in s.exclude_tags for w in index_words(t)} - wanted:
-            q.pop(w, None)
-        return dict(q)
+    for a in s.seed_artists:
+        q[artist_token(a)] += 3.0
+    for w in index_words(s.query):
+        q[w] += 1.0
+    for c in s.countries:
+        q[country_token(c)] += 2.0
+    for lang in s.languages:
+        q[lang_token(lang)] += 2.0
+    for y in s.years:
+        q[year_token(y)] += 2.0
+    wanted = {w for t in s.include_tags for w in index_words(t)}
+    for w in {w for t in s.exclude_tags for w in index_words(t)} - wanted:
+        q.pop(w, None)
+    return dict(q)
 
 
 class RelistenRetriever(BaseRetriever):
-    """Свои треки пользователя: score = совпадение с запросом (0..1) + history_weight * вес в истории (0..1)."""
+    """Свои треки пользователя: score = совпадение с запросом (0..1) + history_weight * вес в истории (0..1).
+    Совпадение считает локальный BM25-индекс по тегам, жанрам, артисту, году, стране и языку трека."""
     name = "relisten"
 
     def __init__(self, catalog: Catalog, index: BM25Index, top_k: int = 100, history_weight: float = 0.3,
                  recency_decay: float = 0.995):
         super().__init__(catalog, top_k)
-        self.query_source = BM25Retriever(catalog, index)
         self.index = index
         self.history_weight = history_weight
         self.recency_decay = recency_decay
@@ -112,7 +85,7 @@ class RelistenRetriever(BaseRetriever):
         pos = np.array([p for p, _ in items])
         hist = np.array([np.log1p(h.count) * self.recency_decay ** i for i, (_, h) in enumerate(items)])
         score = self.history_weight * hist / hist.max()
-        q = self.query_source.build_query(ctx)
+        q = query_terms(ctx.summary)
         if q:
             match = self.index.scores(q)[pos]
             if match.max() > 0:
@@ -120,45 +93,6 @@ class RelistenRetriever(BaseRetriever):
         k = min(top_k or self.top_k, len(pos))
         order = np.argsort(-score, kind="stable")[:k]
         return self.to_candidates(pos[order], score[order])
-
-
-class TitleRetriever(BaseRetriever):
-    """Артист + название по триграммам. Отдаёт только треки, покрывающие >= min_coverage триграмм запроса."""
-    name = "title"
-
-    def __init__(self, catalog: Catalog, top_k: int = 50, min_coverage: float = 0.4):
-        super().__init__(catalog, top_k)
-        self.index = build_title_index(catalog)
-        self.min_coverage = min_coverage
-
-    @staticmethod
-    def query_text(ctx: Context) -> str:
-        """Слова последней реплики без служебных («play», «by», «the song»); имена на языке оригинала — как есть."""
-        last = ctx.request.user_messages[-1] if ctx.request.user_messages else ""
-        words = [w for w in tokenize(last) if w not in STOPWORDS and w not in GENERIC_WORDS]
-        return " ".join(words + ctx.summary.seed_artists)
-
-    def search(self, ctx: Context, top_k: Optional[int] = None) -> List[Candidate]:
-        grams = char_trigrams(self.query_text(ctx))
-        if len(grams) < 3:
-            return []
-        q = dict(Counter(grams))
-        pos, scores = self.index.search(q, top_k or self.top_k, exclude=self.catalog.positions(ctx.banned_ids))
-        qset = set(grams)
-        keep = [i for i, p in enumerate(pos)
-                if len(qset & set(char_trigrams(f"{self.catalog.df.at[p, 'artist']} {self.catalog.df.at[p, 'title']}")))
-                >= self.min_coverage * len(qset)]
-        return self.to_candidates(pos[keep], scores[keep])
-
-
-class LyricsRetriever(_BM25Source):
-    """Строчка текста: латинские слова последней реплики -> BM25 по текстам. Нужно >= 2 слов."""
-    name = "lyrics"
-
-    def build_query(self, ctx: Context) -> Dict[str, float]:
-        last = ctx.request.user_messages[-1] if ctx.request.user_messages else ""
-        words = index_words(last)
-        return dict(Counter(words)) if len(words) >= 2 else {}
 
 
 def taste_track_weights(ctx: Context, catalog: Catalog) -> Dict[str, float]:
@@ -181,7 +115,7 @@ def taste_track_weights(ctx: Context, catalog: Catalog) -> Dict[str, float]:
 
 
 class AudioRetriever(BaseRetriever):
-    """Косинус MuQ-эмбеддингов к взвешенному центру истории (+ лайки и треки артистов-сидов)."""
+    """Косинус MuQ-эмбеддингов к взвешенному центру истории (+ лайки и треки артистов-сидов) или к образцу."""
     name = "audio"
 
     def __init__(self, catalog: Catalog, top_k: int = 200):
@@ -211,102 +145,32 @@ class AudioRetriever(BaseRetriever):
         return self.to_candidates(top, scores[top])
 
 
-class HistoryRetriever(_BM25Source):
-    name = "history"
-
-    def __init__(self, catalog: Catalog, index: BM25Index, top_k: int = 200,
-                 n_tags: int = 15, n_artists: int = 5):
-        super().__init__(catalog, index, top_k)
-        self.n_tags = n_tags
-        self.n_artists = n_artists
-
-    def build_query(self, ctx: Context) -> Dict[str, float]:
-        prof = ctx.profile
-        q: Counter = Counter()
-        top_tags = sorted(prof.tag_weights.items(), key=lambda kv: -kv[1])[:self.n_tags]
-        for tag, w in top_tags:
-            q[tag_token(tag)] += w / top_tags[0][1]
-        top_art = sorted(prof.artist_weights.items(), key=lambda kv: -kv[1])[:self.n_artists]
-        for a, w in top_art:
-            q[artist_token(a)] += 1.5 * w / top_art[0][1]
-        for tid in ctx.request.liked_ids:  # лайки в текущем диалоге
-            for tag in self.catalog.tags(tid)[:5]:
-                q[tag_token(tag)] += 0.5
-        return dict(q)
-
-
-class PopularRetriever(BaseRetriever):
-    name = "popular"
-
-    def __init__(self, catalog: Catalog, top_k: int = 100, n_profile_tags: int = 5):
-        super().__init__(catalog, top_k)
-        self.n_profile_tags = n_profile_tags
-        self._pop = catalog.df["popularity"].to_numpy(dtype=np.float64)
-
-    def search(self, ctx: Context, top_k: Optional[int] = None) -> List[Candidate]:
-        k = top_k or self.top_k
-        tags = (ctx.profile.top_genres(self.n_profile_tags) + ctx.profile.top_tags(self.n_profile_tags)
-                + ctx.summary.user_tags)
-        pool = self.catalog.positions_with_any_tag(dict.fromkeys(tags))
-        if len(pool) < k:
-            pool = np.arange(len(self.catalog))
-        pool = np.setdiff1d(pool, self.catalog.positions(ctx.banned_ids))
-        if len(pool) == 0:
-            return []
-        order = pool[np.argsort(-self._pop[pool], kind="stable")[:k]]
-        return self.to_candidates(order, self._pop[order])
-
-
 def build_retrievers(cfg: Dict[str, Any], catalog: Catalog,
                      bm25_index: Optional[BM25Index] = None) -> List[BaseRetriever]:
-    """Источники из cfg['retrieval'] с enabled: true, в порядке конфига.
-
-    Тип источника — поле type (по умолчанию = имя), так можно завести несколько источников
-    одного типа (type: bm25_api и т.п.). Удалённые типы: recsys/retrieval/remote.py.
-    """
+    """Источники из cfg['retrieval'] с enabled: true, в порядке конфига. bm25_index — готовый индекс для relisten,
+    чтобы не строить его заново (строится за секунды, но в ноутбуке пайплайн пересобирают часто)."""
     from recsys.retrieval.remote import BM25APIRetriever, CandgenClient, HNSWAPIRetriever
 
-    rcfg = cfg.get("retrieval", {})
-    enabled = {name: c for name, c in rcfg.items() if c.get("enabled", False)}
-    kinds = {name: c.get("type", name) for name, c in enabled.items()}
-    if bm25_index is None and ({"bm25", "history", "relisten"} & set(kinds.values())):
-        b = rcfg.get("bm25", {})
-        bm25_index = build_bm25_index(catalog, k1=b.get("k1", 1.2), b=b.get("b", 0.75))
     out: List[BaseRetriever] = []
-    for name, c in enabled.items():
+    for name, c in cfg.get("retrieval", {}).items():
+        if not c.get("enabled", False):
+            continue
         k = c.get("top_k", 200)
-        kind = kinds[name]
-        if kind == "bm25_api":
-            out.append(BM25APIRetriever(name, catalog, CandgenClient.from_config(cfg, "bm25", c), index=c.get("index", "cards"),
-                                        top_k=k, query=c.get("query", "tags")))
-        elif kind == "hnsw_api":
+        if name == "relisten":
+            index = bm25_index or build_bm25_index(catalog, k1=c.get("k1", 1.2), b=c.get("b", 0.75))
+            out.append(RelistenRetriever(catalog, index, top_k=k, history_weight=c.get("history_weight", 0.3)))
+        elif name == "audio":
+            if catalog.embeddings is None:
+                raise ValueError("retrieval.audio: в каталоге нет эмбеддингов MuQ")
+            out.append(AudioRetriever(catalog, top_k=k))
+        elif name == "bm25":
+            out.append(BM25APIRetriever(name, catalog, CandgenClient.from_config(cfg, "bm25", c),
+                                        index=c.get("index", "cards"), top_k=k))
+        elif name == "hnsw":
             from recsys.retrieval.query_embedder import GemmaQueryEmbedder
             embedder = GemmaQueryEmbedder(**cfg.get("candgen", {}).get("hnsw", {}).get("embedder", {}))
             out.append(HNSWAPIRetriever(name, catalog, CandgenClient.from_config(cfg, "hnsw", c), top_k=k,
                                         embedder=embedder))
-        elif kind == "bm25":
-            out.append(BM25Retriever(catalog, bm25_index, top_k=k))
-        elif kind == "history":
-            out.append(HistoryRetriever(catalog, bm25_index, top_k=k,
-                                        n_tags=c.get("n_tags", 15), n_artists=c.get("n_artists", 5)))
-        elif kind == "popular":
-            out.append(PopularRetriever(catalog, top_k=k))
-        elif kind == "relisten":
-            out.append(RelistenRetriever(catalog, bm25_index, top_k=k,
-                                         history_weight=c.get("history_weight", 0.3)))
-        elif kind == "title":
-            out.append(TitleRetriever(catalog, top_k=k, min_coverage=c.get("min_coverage", 0.4)))
-        elif kind == "lyrics":
-            lyrics_index = build_lyrics_index(catalog)
-            if lyrics_index is None:
-                warnings.warn("retrieval.lyrics: в каталоге нет текстов (data.crs.with_lyrics: false), источник выключен")
-                continue
-            out.append(LyricsRetriever(catalog, lyrics_index, top_k=k))
-        elif kind == "audio":
-            if catalog.embeddings is None:
-                warnings.warn("retrieval.audio: в каталоге нет эмбеддингов, источник выключен")
-                continue
-            out.append(AudioRetriever(catalog, top_k=k))
         else:
-            raise ValueError(f"Неизвестный тип источника кандидатов: {name} (type={kind})")
+            raise ValueError(f"Неизвестный источник кандидатов: {name} (есть relisten, audio, bm25, hnsw)")
     return out

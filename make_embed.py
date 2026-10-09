@@ -119,7 +119,7 @@ def main(argv=None) -> int:
         return 1
     if not a.no_server and not check_server(embedder):
         return 1
-    print("\nготово: inference.ipynb и evaluate.py --candgen строят вектор для HNSW сами")
+    print("\nготово: inference.ipynb и evaluate.py строят вектор для HNSW сами")
     return 0
 
 

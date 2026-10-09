@@ -1,7 +1,7 @@
 """Метрики кандгенов: каждый источник кандидатов отдельно и все вместе, без ранкера и описания (быстрее evaluate.py).
 
-    python evaluate_candgen.py --n-users 1000                    # локальные источники
-    python evaluate_candgen.py --n-users 1000 --candgen          # + BM25 и HNSW с сервера
+    python evaluate_candgen.py --n-users 1000                    # все источники (BM25 и HNSW с сервера)
+    python evaluate_candgen.py --n-users 1000 --offline          # без сервисов: relisten и audio
     python evaluate_candgen.py --sources bm25,audio              # только эти источники
     python evaluate_candgen.py --set retrieval.audio.top_k=500   # любой параметр конфига
 

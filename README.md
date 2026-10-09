@@ -24,8 +24,9 @@ jupyter lab inference.ipynb   # или открыть в DataSphere
 Вектор запроса для HNSW строим сами (EmbeddingGemma-2, GPU если есть, иначе CPU): один раз на машину
 `python make_embed.py` — проверит пакеты, скачает веса, построит вектор и сверит его с индексом на сервере.
 
-С сервисами на сервере: задать `BM25_URL`, `BM25_API_KEY`, `HNSW_URL`, `HNSW_API_KEY` (файл `.env` в корне — он не в git —
-или секреты DataSphere) и поставить в ноутбуке `USE_CANDGEN = True`.
+Сервисы BM25 и HNSW включены по умолчанию: задать `BM25_URL`, `BM25_API_KEY`, `HNSW_URL`, `HNSW_API_KEY` (файл `.env`
+в корне — он не в git — или секреты DataSphere). Без них: `USE_CANDGEN = False` в ноутбуке или `--offline` у скриптов
+(остаются `relisten` и `audio`).
 
 Данные — Music4All-CRS в папке `music4all_crs/` (`data.crs.dir`, в git не хранится): `tracks_meta.parquet`,
 `train.parquet` / `test_public.parquet` (пользователи), `*_queries.parquet` (запросы), `*_qrels.parquet` (ответы).
@@ -48,9 +49,8 @@ jupyter lab inference.ipynb   # или открыть в DataSphere
 | `dev/hnsw`, релиз `hnsw-v1` | текстовый семантический поиск (EmbeddingGemma + LanceDB, `POST /hnsw/search`) | развёрнут на сервере |
 | `dev-ranker` | ранкер LightGBM | в разработке |
 
-- `configs/candgen.yaml` включает источники `bm25_cards` и `hnsw` с сервера вместо локального `bm25`.
-  Адреса и ключи — `BM25_URL`, `BM25_API_KEY`, `HNSW_URL`, `HNSW_API_KEY` (файл `.env` или секреты DataSphere).
-  Без неё всё считается локально, так что ноутбуки работают и без сервера.
+- Источники `bm25` и `hnsw` в `configs/default.yaml` — это они. Адреса и ключи — `BM25_URL`, `BM25_API_KEY`, `HNSW_URL`,
+  `HNSW_API_KEY` (файл `.env` или секреты DataSphere).
 - Если сервис недоступен, его источники возвращают пустой список с предупреждением, остальные работают.
 
 ## Валидация (`evaluate.py`)
@@ -61,18 +61,18 @@ jupyter lab inference.ipynb   # или открыть в DataSphere
 (`recall@<источник>`) и всех вместе (`recall@fused`) — качество кандгенов.
 
 ```bash
-python evaluate.py --n-users 1000                   # быстро, ~3 мин локально
-python evaluate.py --n-users all --candgen          # весь сплит, BM25 и HNSW с сервера
+python evaluate.py --n-users 1000                   # 1000 пользователей, BM25 и HNSW с сервера
+python evaluate.py --n-users all                    # весь сплит
+python evaluate.py --n-users 1000 --offline         # без сервисов (relisten и audio), ~3 мин
 python evaluate.py --set ranker.type=heuristic      # любой параметр конфига
 ```
 
 Результат — `outputs/<время>_<сплит>/`: `metrics.json` (метрики, конфиг, git-коммит, версии индексов сервисов,
 ошибки сервисов), `submission.parquet` (сабмит), `by_query_type.csv`, `by_is_new.csv`, `per_request.csv`
 (дописывается по ходу), `config.yaml`.
-С `--candgen` прогон не начнётся, если сервис недоступен (код выхода 2).
+Прогон не начнётся, если сервис недоступен (код выхода 2).
 
-Скорость: ~30 запросов/с локально, ~2 запроса/с с HNSW (он отвечает ~0.5 с); все пользователи по 5 запросов (~60k) —
-около 35 минут локально, весь сплит (273k) — ~2.5 часа локально.
+Скорость: ~30 запросов/с без сервисов, ~3 запроса/с с BM25 сервера, ~2 запроса/с с HNSW (он отвечает ~0.5 с).
 Короткие прогоны — из ноутбука (`!python evaluate.py ...`) или локально; полный — в DataSphere Jobs без открытого
 ноутбука: `datasphere project job execute -p <id проекта> -c jobs/evaluate.yaml` (что подготовить — в начале файла).
 
@@ -83,8 +83,8 @@ python evaluate.py --set ranker.type=heuristic      # любой парамет�
 вход ранкера; его nDCG@20 — это выдача stub-ранкера).
 
 ```bash
-python evaluate_candgen.py --n-users 1000                     # локальные источники
-python evaluate_candgen.py --n-users 1000 --candgen           # + BM25 и HNSW с сервера
+python evaluate_candgen.py --n-users 1000                     # все источники
+python evaluate_candgen.py --n-users 1000 --offline           # без сервисов
 python evaluate_candgen.py --sources bm25,audio               # только эти источники
 python evaluate_candgen.py --split train --set fusion.exclude_top_tags=5   # подбирать параметры — на train
 ```
@@ -124,19 +124,14 @@ python evaluate_candgen.py --split train --set fusion.exclude_top_tags=5   # п�
   в ~97% случаев (проверено на train), поэтому нарушители уходят вниз списка (штраф к RRF), но не выкидываются.
   Страна артиста — нет: цель ей удовлетворяет в ~80%. Признак `n_violations` есть у ранкера.
 
-Источники кандидатов:
+Источники кандидатов — четыре, у каждого своя задача:
 
-| Источник | Что делает | Для каких запросов |
+| Источник | Как ищет | Зачем |
 |---|---|---|
-| `bm25` | теги, жанры, артист, название, альбом, десятилетие, страна, язык | genre, mood, era_region, complex |
-| `relisten` | треки из истории пользователя по совпадению с запросом и весу в истории | все, кроме discovery |
-| `title` | артист + название по триграммам | exact |
-| `lyrics` | строчка текста песни (выключен: нужен `data.crs.with_lyrics: true`) | lyrics_recall |
-| `history` | новые треки по профилю тегов и артистов | novelty, `is_new` |
-| `audio` | эмбеддинги MuQ, ближайшие к треку-образцу (similar_to) или к центру вкуса | similar_to, audio_attributes |
-| `popular` | популярное в жанрах пользователя | холодный старт |
-| `bm25_cards` | BM25 с сервера по всей карточке трека (`type: bm25_api`, индекс `cards`) | как `bm25` |
-| `hnsw` | текстовый семантический поиск с сервера: вектор реплики строим сами (EmbeddingGemma), сервис принимает только вектор; без модели источник пропускается | exact, lyrics_recall, vague_recall |
+| `relisten` | треки из истории пользователя: совпадение с запросом (локальный BM25 по тегам, жанрам, артисту, году) + сколько и как недавно слушал | 93% целей — повторные прослушивания, другие источники их почти не находят |
+| `audio` | MuQ-эмбеддинги: ближайшие к треку-образцу «like X by Y» или к центру вкуса | similar_to (новые треки, похожие по звучанию) |
+| `bm25` | сервис BM25 по карточке трека (теги, жанры, название, артист, год, ...): слова запроса | genre, era_region, complex, exact, lyrics |
+| `hnsw` | сервис HNSW: вектор реплики (EmbeddingGemma строим сами, `make_embed.py`) | смысл запроса: vague_recall, lyrics_theme, mood |
 
 Контракты между шагами: `recsys/schemas.py` (`Request`, `DialogSummary`, `Candidate`, `FusedCandidate`, `RankedTrack`, `Response`).
 
@@ -150,7 +145,6 @@ make_embed.py              подготовка вектора запроса д
 jobs/evaluate.yaml         то же в DataSphere Jobs
 experiments.ipynb          эксперименты: разбор по шагам, сравнение вариантов
 configs/default.yaml       все параметры и переключатели
-configs/candgen.yaml       надстройка: BM25 и HNSW с сервера по HTTP
 docs/dataset.md            описание датасета
 docs/candgen_api.md        API сервисов-кандгенов (контракт с нашей частью)
 examples/candgen.ipynb     проверка BM25 и HNSW руками
@@ -162,9 +156,9 @@ recsys/
   llm.py          StubLLM, LocalLLM (transformers), extract_json
   dialog.py       шаг 1: RuleSummarizer (заглушка), LLMSummarizer, промпты
   retrieval/
-    local_index.py  локальные индексы (BM25 по тегам, триграммы названий, тексты песен) — не сервис BM25
-    sources.py    шаг 2: локальные источники кандидатов
-    remote.py     шаг 2: источники с сервера по HTTP (bm25_api, hnsw_api)
+    local_index.py  локальный BM25-индекс для relisten — не сервис BM25
+    sources.py    шаг 2: relisten, audio и сборка источников из конфига
+    remote.py     шаг 2: сервисы bm25 и hnsw по HTTP
   fusion.py       шаг 3: RRF, фильтры, ограничения запроса, веса источников
   ranking.py      шаг 4: признаки, StubRanker, HeuristicRanker, APIRanker
   explain.py      шаг 5: StubExplainer, LLMExplainer (ответ по-английски)

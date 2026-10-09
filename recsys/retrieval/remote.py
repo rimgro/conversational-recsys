@@ -1,14 +1,14 @@
-"""Кандидаты из сервисов-кандгенов по HTTP: BM25 (ветка dev/bm25) и HNSW (релиз hnsw-v1), оба на сервере.
+"""Кандидаты из сервисов-кандгенов по HTTP: BM25 (ветка bm25-cards) и HNSW (релиз hnsw-v1), оба на сервере.
 
 Кандгены обучаются и живут отдельно; здесь только predict-вызовы по контракту docs/candgen_api.md.
 Тот же интерфейс, что у локальных источников: search(ctx) -> [Candidate]. Ошибка сети / сервиса ->
 пустой список, предупреждение и last_error (пайплайн не падает, остальные источники работают).
 
-  bm25_api   POST /bm25/search  слова из саммари -> индекс cards (вся карточка трека)  (candgen.bm25)
-  hnsw_api   POST /hnsw/search  вектор последней реплики (EmbeddingGemma, строим сами) -> LanceDB  (candgen.hnsw);
+  bm25       POST /bm25/search  слова из саммари -> индекс cards (вся карточка трека)  (candgen.bm25)
+  hnsw       POST /hnsw/search  вектор последней реплики (EmbeddingGemma, строим сами) -> LanceDB  (candgen.hnsw);
                                 сервис принимает только vector: без модели источник пропускается
 
-Конфиг: раздел candgen (timeout, retries; bm25 / hnsw: url, api_key) + источники с type: bm25_api | hnsw_api.
+Конфиг: раздел candgen (timeout, retries; bm25 / hnsw: url, api_key) + источники retrieval.bm25 / retrieval.hnsw.
 Значения вида ${VAR} и ${VAR:-по умолчанию} берутся из переменных окружения (и файла .env).
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 
 from recsys.data.catalog import Catalog
 from recsys.retrieval.local_index import index_words
-from recsys.retrieval.sources import BaseRetriever, TitleRetriever
+from recsys.retrieval.sources import BaseRetriever
 from recsys.schemas import Candidate, Context
 
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
@@ -154,30 +154,23 @@ class _RemoteRetriever(BaseRetriever):
 
 
 class BM25APIRetriever(_RemoteRetriever):
-    """query: 'tags' — теги, страна/эпоха и латинские слова саммари; 'title' — артист + название (с транслитом)."""
+    """Слова запроса: слова include_tags и query из саммари, без слов исключённых тегов."""
     service = "bm25"
     path = "/bm25/search"
     health_path = "/health"
     MAX_WORDS = 256
 
     def __init__(self, name: str, catalog: Catalog, client: CandgenClient, index: str = "cards",
-                 top_k: int = 200, query: str = "tags"):
+                 top_k: int = 200):
         super().__init__(name, catalog, client, index, top_k)
-        if query not in ("tags", "title"):
-            raise ValueError(f"{name}: query должен быть tags или title, а не {query!r}")
-        self.query = query
 
     def words(self, ctx: Context) -> List[str]:
         s = ctx.summary
-        if self.query == "title":
-            words = TitleRetriever.query_text(ctx).split()
-        else:
-            words = [w for t in s.include_tags for w in index_words(t)] + index_words(s.query)
-            # слова исключённых тегов убираем, если они не входят в желаемые ('rock, but not hard rock')
-            wanted = {w for t in s.include_tags for w in index_words(t)}
-            banned = {w for t in s.exclude_tags for w in index_words(t)} - wanted
-            words = [w for w in words if w not in banned]
-        return list(Counter(words))[:self.MAX_WORDS]
+        words = [w for t in s.include_tags for w in index_words(t)] + index_words(s.query)
+        # слова исключённых тегов убираем, если они не входят в желаемые ('rock, but not hard rock')
+        wanted = {w for t in s.include_tags for w in index_words(t)}
+        banned = {w for t in s.exclude_tags for w in index_words(t)} - wanted
+        return list(Counter(w for w in words if w not in banned))[:self.MAX_WORDS]
 
     def payload(self, ctx: Context, k: int) -> Optional[Dict[str, Any]]:
         words = self.words(ctx)

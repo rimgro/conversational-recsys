@@ -7,19 +7,18 @@
 #   * music4all_crs/ — tracks_meta.parquet, test_public.parquet, test_public_queries.parquet,
 #     test_public_qrels.parquet (train не нужен); папка загружается в задание целиком.
 #   * секреты проекта BM25_URL, BM25_API_KEY, HNSW_URL, HNSW_API_KEY — секреты DataSphere передаются заданию
-#     как переменные окружения. Без сервисов: убрать --candgen из cmd.
+#     как переменные окружения. Без сервисов: добавить --offline в cmd.
 # Результат (metrics.json, submission.parquet, by_query_type.csv, ...) скачивается в eval_result/ после выполнения.
 # Быстрая проверка — --n-users 300 вместо all.
 name: recsys-evaluate
 desc: Метрики пайплайна на test_public (BM25 и HNSW с сервера)
 
 cmd: >
-  python3 evaluate.py --candgen --split test_public --n-users all
+  python3 evaluate.py --split test_public --n-users all
   --data-dir ${DATA} --run-dir ${RESULT}
 
 inputs:
   - configs/default.yaml
-  - configs/candgen.yaml
   - music4all_crs:
       var: DATA
 

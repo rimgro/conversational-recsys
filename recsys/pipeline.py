@@ -59,8 +59,8 @@ class Pipeline:
 
     @property
     def bm25_index(self) -> Optional[BM25Index]:
-        """Общий BM25-индекс по тегам (у bm25 / relisten / history), чтобы не строить его заново."""
-        return next((r.index for r in self.retrievers if r.name in ("bm25", "relisten", "history")), None)
+        """Локальный BM25-индекс relisten: передать в следующий Pipeline.from_config, чтобы не строить заново."""
+        return next((r.index for r in self.retrievers if r.name == "relisten"), None)
 
     def retrieve(self, request: Request) -> Retrieval:
         """Шаги 1–3: разбор диалога, кандидаты, RRF + фильтры. Без ранкера и описания (метрики кандгенов)."""

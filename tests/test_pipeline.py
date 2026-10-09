@@ -26,8 +26,9 @@ def test_next_turn_excludes_shown(cfg, data):
 
 
 def test_cold_start_empty_request(cfg, data):
+    """Ни истории, ни запроса: кандидатов нет, но пайплайн отвечает (в датасете такого не бывает)."""
     resp = Pipeline.from_config(cfg, data.catalog).run(Request())
-    assert len(resp.tracks) > 0
+    assert resp.tracks == [] and resp.text
 
 
 def test_llm_stub_falls_back(cfg, data):
@@ -89,9 +90,9 @@ def test_metrics_by_family_and_shared_index(cfg, data):
     per, _ = evaluate(pipe, data.requests[:30], verbose=False)
     by = metrics_by(per, "query_type")
     assert by["n"].sum() == 30 and set(by.index) <= {r.meta["query_type"] for r in data.requests}
-    # без bm25 общий индекс берётся у relisten, а не у title/lyrics
-    no_bm25 = Pipeline.from_config(deep_update(cfg, {"retrieval": {"bm25": {"enabled": False}}}), data.catalog)
-    assert no_bm25.bm25_index is no_bm25.retrievers[0].index and no_bm25.retrievers[0].name == "relisten"
+    # локальный индекс relisten передаётся в следующий пайплайн и не строится заново
+    again = Pipeline.from_config(cfg, data.catalog, bm25_index=pipe.bm25_index)
+    assert again.bm25_index is pipe.bm25_index is pipe.retrievers[0].index
     table = compare_configs(cfg, {"a": {}, "b": {"ranker": {"type": "heuristic"}}}, data.catalog,
                             data.requests[:20], by="query_type")
     assert list(table.columns) == ["a", "b"] and "ALL" in table.index

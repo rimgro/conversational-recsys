@@ -1,7 +1,8 @@
 """Прогон валидации: метрики пайплайна на сплите датасета (по умолчанию test_public).
 
-    python evaluate.py --n-users 1000                       # быстро: 1000 пользователей test_public
-    python evaluate.py --n-users all --candgen              # весь сплит, BM25 и HNSW с сервера
+    python evaluate.py --n-users 1000                       # 1000 пользователей test_public, BM25 и HNSW с сервера
+    python evaluate.py --n-users all                        # весь сплит
+    python evaluate.py --n-users 1000 --offline             # без сервисов: только relisten и audio, быстро
     python evaluate.py --set ranker.type=heuristic          # любой параметр конфига
     python evaluate.py --synthetic                          # без данных: проверить, что код работает
 
@@ -17,7 +18,7 @@
   per_request.csv       метрики каждого запроса; дописывается по ходу, при обрыве прогона не пропадает
   config.yaml           полный конфиг прогона
 
-С --candgen (BM25 и HNSW с сервера) перед стартом проверяется /health: если сервис недоступен, прогон не начинается,
+Перед стартом проверяется /health сервисов BM25 и HNSW: если сервис недоступен, прогон не начинается (код выхода 2),
 чтобы метрики не посчитались молча без его кандидатов. Адреса и ключи — BM25_URL, BM25_API_KEY, HNSW_URL,
 HNSW_API_KEY (из окружения или файла .env).
 Полный прогон в облаке без открытого ноутбука: jobs/evaluate.yaml (DataSphere Jobs).
@@ -67,9 +68,14 @@ def git_commit() -> str:
         return ""
 
 
+REMOTE_SOURCES = ("bm25", "hnsw")
+
+
 def build_config(a: argparse.Namespace):
-    files = [config_path("default.yaml")] + ([config_path("candgen.yaml")] if a.candgen else []) + a.config
+    files = [config_path("default.yaml")] + a.config
     over: dict = {"data": {"eval_split": a.split}}
+    if a.offline or a.synthetic:  # у сервисов каталог датасета: синтетических треков они не знают
+        over["retrieval"] = {name: {"enabled": False} for name in REMOTE_SOURCES}
     if a.synthetic:
         over["data"]["source"] = "synthetic"
         if a.n_users is not None:
@@ -96,7 +102,7 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--synthetic", action="store_true", help="синтетика вместо датасета")
     p.add_argument("--n-users", help="сколько пользователей взять из сплита; all — все (по умолчанию из конфига)")
     p.add_argument("--max-queries", help="запросов на пользователя; all — все (по умолчанию из конфига)")
-    p.add_argument("--candgen", action="store_true", help="BM25 и HNSW с сервера по HTTP (configs/candgen.yaml)")
+    p.add_argument("--offline", action="store_true", help="без сервисов BM25 и HNSW: только локальные источники")
     p.add_argument("--config", action="append", default=[], help="ещё YAML поверх (можно несколько)")
     p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                    help="параметр конфига, например ranker.type=heuristic (можно несколько)")

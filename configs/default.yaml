@@ -19,7 +19,6 @@ data:
     splits: [test_public]      # какие сплиты загружать (train — для обучения ранкера)
     n_users: 300               # сэмпл пользователей на сплит (в test_public 12.2k); null = все
     seed: 42
-    with_lyrics: false         # тексты песен в каталог (нужно для поиска по строчке текста)
 
 llm:
   type: stub                   # stub | local | gemma_service (сервис в DataSphere)
@@ -41,7 +40,7 @@ summarizer:
   type: rule                   # rule (заглушка) | llm (фолбэк на rule)
   min_tag_count: 2
 
-candgen:                       # сервисы-кандгены по HTTP (API: docs/candgen_api.md); включается configs/candgen.yaml
+candgen:                       # сервисы-кандгены по HTTP (API: docs/candgen_api.md): retrieval.bm25 и retrieval.hnsw
   timeout: 5.0                 # секунды на запрос; при ошибке источник пропускается
   retries: 1                   # повтор при обрыве соединения (таймаут не повторяется)
   bm25:
@@ -56,17 +55,11 @@ candgen:                       # сервисы-кандгены по HTTP (API:
       device: null             # null — сама: cuda, если есть GPU, иначе cpu
       dtype: null              # null — float16 на GPU, float32 на CPU
 
-retrieval:                     # enabled: false выключает источник; type по умолчанию = имя (recsys/retrieval/sources.py)
-  bm25:     {enabled: true, top_k: 200, k1: 1.2, b: 0.75}
-  relisten: {enabled: true, top_k: 100, history_weight: 0.3}   # свои треки: 93% целей отсюда
-  title:    {enabled: true, top_k: 50, min_coverage: 0.4}      # артист + название, транслит
-  lyrics:   {enabled: false, top_k: 50}                        # нужен data.crs.with_lyrics: true
-  history:  {enabled: true, top_k: 200, n_tags: 15, n_artists: 5}
-  audio:    {enabled: true, top_k: 200}                        # эмбеддинги MuQ
-  popular:  {enabled: true, top_k: 100}
-  # сервисы на сервере (recsys/retrieval/remote.py), адреса в candgen.bm25 / candgen.hnsw
-  bm25_cards:  {enabled: false, type: bm25_api, index: cards, query: tags, top_k: 200}   # вся карточка трека
-  hnsw:        {enabled: false, type: hnsw_api, top_k: 200}       # запрос как есть -> EmbeddingGemma + LanceDB
+retrieval:                     # источники кандидатов (recsys/retrieval/); enabled: false выключает
+  relisten: {enabled: true, top_k: 100, history_weight: 0.3}   # свои треки: 93% целей — повторные прослушивания
+  audio:    {enabled: true, top_k: 200}                        # MuQ: похожие на образец (similar_to) или на вкус
+  bm25:     {enabled: true, index: cards, top_k: 200}          # сервис BM25 по карточке трека (candgen.bm25)
+  hnsw:     {enabled: true, top_k: 200}                        # сервис HNSW: вектор реплики (candgen.hnsw)
 
 fusion:
   rrf_k: 60
@@ -78,10 +71,8 @@ fusion:
     use: [year, mode, bpm, energy, instrumental, vocals, lang]   # [] — выкл; country хуже (цель ей верна в ~80%)
     penalty: 1.0               # вычитается из RRF за каждое нарушение (RRF ~0.01–0.1): нарушители уходят вниз
     hard: false                # true — выкидывать нарушителей (на train хуже: теряет цель в 1.1% запросов)
-  weights: {bm25: 1.0, relisten: 1.0, title: 1.5, lyrics: 1.5, history: 0.5, audio: 0.5, popular: 0.2,
-            bm25_cards: 1.0, hnsw: 1.0}
-  no_query_boost: {relisten: 1.5, history: 2.0, audio: 1.5, popular: 1.5}   # запрос пустой («ещё»)
-  cold_start_boost: {popular: 2.0}                                         # истории нет
+  weights: {relisten: 1.0, audio: 0.5, bm25: 1.0, hnsw: 1.0}
+  no_query_boost: {relisten: 1.5, audio: 1.5}   # запрос пустой («ещё»): больше доверяем истории
 
 ranker:
   type: stub                   # stub (порядок RRF) | heuristic | api

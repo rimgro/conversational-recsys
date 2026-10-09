@@ -40,7 +40,7 @@ print(result["text"])
 
 ```python
 from recsys.config import load_config
-cfg = load_config(["configs/default.yaml", "configs/candgen.yaml", "configs/gemma.yaml"])
+cfg = load_config(["configs/default.yaml", "configs/gemma.yaml"])
 ```
 
 `configs/gemma.yaml` включает Gemma для описания выдачи. Разбор запроса остаётся

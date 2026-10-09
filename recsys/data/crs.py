@@ -41,9 +41,9 @@ def split_path(directory: str, name: str) -> str:
     return path
 
 
-def read_tracks_meta(path: str, with_lyrics: bool = False) -> pd.DataFrame:
+def read_tracks_meta(path: str) -> pd.DataFrame:
     """Читает только нужные колонки (в файле их ~75, включая длинные тексты)."""
-    wanted = _RAW_COLUMNS + EXTRA_COLUMNS + (["lyrics"] if with_lyrics else [])
+    wanted = _RAW_COLUMNS + EXTRA_COLUMNS
     present = set(pq.read_schema(path).names)
     return pq.read_table(path, columns=[c for c in wanted if c in present]).to_pandas()
 
@@ -79,7 +79,7 @@ def catalog_from_meta(meta: pd.DataFrame, max_tags: int = 20) -> Catalog:
         "genres": [_split_csv(x) for x in meta.get("m4a_genres_full", [None] * len(meta))],
         "popularity": pd.to_numeric(meta.get("onion_listens", 0), errors="coerce"),
     })
-    for col in EXTRA_COLUMNS + ["lyrics"]:
+    for col in EXTRA_COLUMNS:
         if col in meta:
             df[col] = meta[col].to_numpy()
     emb = None
