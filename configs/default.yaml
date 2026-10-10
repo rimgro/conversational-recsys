@@ -66,6 +66,11 @@ bm25_index:                    # локальный BM25 по карточке �
                                # текст песни даёт основной прирост (relisten nDCG@20 0.21 -> 0.28),
                                # caption, album, artist по отдельности не помогают
 
+semantic_ids:                  # коды RQ-VAE по MuQ для двухбашенного кандгена (recsys/semantic_ids.py,
+  dir: artifacts/semantic_ids  # docs/semantic_ids.md); проверка: python check_semantic_ids.py
+  codes: semantic_codes.npy    # (n_tracks, 4): 3 кода 0..255 + номер при коллизии; строка = tracks_meta по m4a_id
+  checkpoint: rqvae_checkpoint.pt   # энкодер MuQ -> 32, три кодбука 256 x 32
+
 fusion:
   rrf_k: 60
   top_n: 500                   # сколько отдаём в ранкер

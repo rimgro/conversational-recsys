@@ -43,7 +43,6 @@ venv/
 
 # датасет Music4All-CRS и кэш каталога (docs/dataset.md)
 /music4all_crs/
-/CRS dataset/
 /cache/
 
 # runtime LLM хранится вне репозитория

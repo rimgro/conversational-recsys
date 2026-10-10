@@ -147,12 +147,15 @@ experiments.ipynb          эксперименты: разбор по шага�
 configs/default.yaml       все параметры и переключатели
 docs/dataset.md            описание датасета
 docs/candgen_api.md        API сервисов-кандгенов (контракт с нашей частью)
+docs/semantic_ids.md       semantic ID треков: файлы, RQ-VAE по MuQ, что проверено
 examples/candgen.ipynb     проверка сервиса HNSW руками
 make_index.py              предподсчёт локального BM25-индекса карточек (cache/)
+check_semantic_ids.py      проверка semantic ID (коды RQ-VAE в artifacts/semantic_ids/): коллизии, порядок строк, дубли песен
 recsys/
   schemas.py      контракты между шагами
   config.py       загрузка YAML + overrides (предупреждает об опечатках в ключах)
   pipeline.py     пять шагов схемы
+  semantic_ids.py коды RQ-VAE треков, кодбуки, RQ-VAE в numpy (двухбашенный кандген)
   text.py         нормализация тегов, токенизация, эпохи / страны / языки в запросе
   llm.py          StubLLM, LocalLLM (transformers), extract_json
   dialog.py       шаг 1: RuleSummarizer (заглушка), LLMSummarizer, промпты
