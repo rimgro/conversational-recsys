@@ -120,7 +120,8 @@ def check_candgen(pipe: Pipeline):
     for name, h in health.items():
         print(f"[candgen] {name}: {h}")
     if down:
-        print(f"сервисы недоступны: {sorted(down)}; проверьте адрес и ключ в .env (HNSW_URL, HNSW_API_KEY)", file=sys.stderr)
+        print(f"сервисы недоступны: {sorted(down)}; проверьте адрес и ключ в .env (HNSW_URL, HNSW_API_KEY), "
+              f"для no_embedder — python make_embed.py; без HNSW — --offline", file=sys.stderr)
         return remote, None
     return remote, health
 

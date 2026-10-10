@@ -205,3 +205,19 @@ def test_rule_summarizer_fills_constraints(data):
     s = RuleSummarizer(data.catalog).summarize(Request(dialog=[Message("user", "80s synthpop in a minor key"),
                                                                Message("user", "actually make it major")]))
     assert s.constraints["mode"] == 1 and s.constraints["year_min"] == 1980  # позже сказанное перекрывает
+
+
+def test_novelty_filter_uses_whole_history():
+    """novelty: артисты всей истории, а не только последних треков профиля (build_profile берёт 300)."""
+    import pandas as pd
+    from recsys.data.catalog import Catalog
+    from recsys.data.history import build_profile
+    from recsys.fusion import apply_filters
+    from recsys.schemas import Context, DialogSummary, FusedCandidate, HistoryItem
+    cat = Catalog(pd.DataFrame({"track_id": ["old", "new", "x", "y"], "artist": ["Old", "New", "Old", "Fresh"]}))
+    history = [HistoryItem("new", 1.0, 2)] + [HistoryItem("old", 1.0, 1)]
+    profile = build_profile(history, cat, max_tracks=1)  # в профиль попал только свежий трек
+    assert "Old" not in profile.artist_weights
+    ctx = Context(Request(history=history), DialogSummary(new_artists=True), profile)
+    kept = apply_filters([FusedCandidate("x", 0.2), FusedCandidate("y", 0.1)], ctx, cat)
+    assert [f.track_id for f in kept] == ["y"]

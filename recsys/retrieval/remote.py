@@ -157,18 +157,29 @@ class HNSWAPIRetriever(_RemoteRetriever):
         if not text:
             return None
         if self.embedder is None or self.embed_error is not None:
+            self.n_errors += 1
             return None
         try:
             return {"vector": self.embedder.encode(text), "k": k}
         except Exception as e:  # нет sentence-transformers / GPU / доступа к модели
             self.embed_error = f"{type(e).__name__}: {e}"
+            self.n_errors += 1
             warnings.warn(f"{self.name}: вектор запроса не построен, источник пропущен ({self.embed_error})")
             return None
 
     def health(self) -> Dict[str, Any]:
+        """Сервис отвечает и вектор запроса строится: без модели сервис «ok», но кандидатов не будет."""
         try:
             resp = self.client.get(self.health_path)
         except CandgenError as e:
             return {"url": self.client.url, "status": "unavailable", "error": str(e)}
-        return {"url": self.client.url, "status": resp.get("status"),
-                "index_version": f"{resp.get('release')}/{resp.get('table_version')}", "n_items": resp.get("n_items")}
+        out = {"url": self.client.url, "status": resp.get("status"),
+               "index_version": f"{resp.get('release')}/{resp.get('table_version')}", "n_items": resp.get("n_items")}
+        if self.embedder is None:
+            return {**out, "status": "no_embedder", "error": "модель для вектора запроса не задана"}
+        try:
+            self.embedder.encode("health check")
+        except Exception as e:  # нет sentence-transformers / GPU / доступа к модели (python make_embed.py)
+            self.embed_error = f"{type(e).__name__}: {e}"
+            return {**out, "status": "no_embedder", "error": self.embed_error}
+        return out

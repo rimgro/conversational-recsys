@@ -54,7 +54,9 @@ class Filters:
         self.banned = ctx.banned_ids
         self.ex_tags = ctx.summary.exclude_tags
         self.ex_artists = {a.lower() for a in ctx.summary.exclude_artists}
-        self.history_artists = {a.lower() for a in ctx.profile.artist_weights} if ctx.summary.new_artists else set()
+        # вся история, а не profile.artist_weights: в профиле только последние 300 треков, а у пользователя их ~1000
+        self.history_artists = ({catalog.artist(h.track_id).lower() for h in ctx.request.history} - {""}
+                                if ctx.summary.new_artists else set())
 
     def reason(self, track_id: str) -> Optional[str]:
         if track_id in self.banned:

@@ -159,3 +159,15 @@ def test_hnsw_sends_vector_built_locally(cfg, data, fake_hnsw):
         resp = pipe.run(req, debug=True)
     assert not [b for p, b, h in calls if p == "/hnsw/search"] and hnsw.embed_error
     assert resp.debug["n_candidates"]["hnsw"] == 0 and resp.tracks
+
+
+def test_hnsw_health_checks_embedder(cfg, data, fake_hnsw):
+    """Сервис отвечает, но модель для вектора не загрузилась: /health не «ok», иначе прогон молча идёт без HNSW."""
+    url, _ = fake_hnsw
+    pipe = Pipeline.from_config(_api_cfg(cfg, url), data.catalog)
+    hnsw = next(r for r in pipe.retrievers if r.name == "hnsw")
+    hnsw.embedder = _FakeEmbedder(fail=True)
+    h = hnsw.health()
+    assert h["status"] == "no_embedder" and "sentence_transformers" in h["error"]
+    pipe.run(data.requests[0])
+    assert hnsw.n_errors == 1  # запрос без кандидатов HNSW попадает в candgen_errors
