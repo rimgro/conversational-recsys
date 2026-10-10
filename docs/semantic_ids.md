@@ -1,7 +1,7 @@
 # Semantic ID треков (RQ-VAE по MuQ)
 
 Коды треков для двухбашенного кандгена: каждый трек — 4 числа, на входе модели — 4 токена.
-Код — `recsys/semantic_ids.py`, проверка — `python check_semantic_ids.py`.
+Код — `recsys/semantic_ids.py`, проверка — `python scripts/check_semantic_ids.py`.
 
 ## Файлы
 
@@ -35,7 +35,7 @@
 Вектор трека из кодов — сумма трёх центроидов (`SemanticIDs.quantized()`, 32 числа): приближение `z`,
 ошибка в среднем 22% нормы `z`. Центроиды по отдельности — `SemanticIDs.centroids()`, `(n, 3, 32)`.
 
-## Что проверено (`check_semantic_ids.py`)
+## Что проверено (`scripts/check_semantic_ids.py`)
 
 - Чекпоинт по MuQ из `tracks_meta` воспроизводит **100%** кодов: порядок строк — `tracks_meta` по `m4a_id`,
   отдельный `items.parquet` не нужен.

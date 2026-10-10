@@ -47,7 +47,7 @@ candgen:                       # сервис-кандген HNSW по HTTP (API
     url: ${HNSW_URL}           # текстовый семантический поиск (релиз hnsw-v1)
     api_key: ${HNSW_API_KEY}   # заголовок X-API-Key; пусто = без ключа
     embedder:                  # вектор запроса строим сами (сервис принимает только vector): recsys/retrieval/
-                               # query_embedder.py; подготовка — python make_embed.py; без модели hnsw пропускается
+                               # query_embedder.py; подготовка — python scripts/make_embed.py; без модели hnsw пропускается
       model_name: google/embeddinggemma-2
       device: null             # null — сама: cuda, если есть GPU, иначе cpu
       dtype: null              # null — float16 на GPU, float32 на CPU
@@ -60,14 +60,14 @@ retrieval:                     # источники кандидатов (recsys
 
 bm25_index:                    # локальный BM25 по карточке трека: источник bm25 и совпадение с запросом в relisten
   k1: 1.2                      # (recsys/retrieval/local_index.py); собирается ~минуту и кэшируется в data.cache_dir:
-  b: 0.75                      # python make_index.py
+  b: 0.75                      # python scripts/make_index.py
   weights: {meta: 1.0, caption: 0.0, lyrics: 1.25, album: 0.0, artist: 0.0, about: 0.3}   # вес поля в скоре;
                                # 0 — поле не участвует (индекс пересобирать не нужно). Подобраны на train:
                                # текст песни даёт основной прирост (relisten nDCG@20 0.21 -> 0.28),
                                # caption, album, artist по отдельности не помогают
 
 semantic_ids:                  # коды RQ-VAE по MuQ для двухбашенного кандгена (recsys/semantic_ids.py,
-  dir: artifacts/semantic_ids  # docs/semantic_ids.md); проверка: python check_semantic_ids.py
+  dir: artifacts/semantic_ids  # docs/semantic_ids.md); проверка: python scripts/check_semantic_ids.py
   codes: semantic_codes.npy    # (n_tracks, 4): 3 кода 0..255 + номер при коллизии; строка = tracks_meta по m4a_id
   checkpoint: rqvae_checkpoint.pt   # энкодер MuQ -> 32, три кодбука 256 x 32
 

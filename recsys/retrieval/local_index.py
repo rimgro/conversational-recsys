@@ -14,7 +14,7 @@
   artist   жанры артиста
   about    описание альбома и статья Википедии об артисте
 
-Сборка на полном каталоге — около минуты, поэтому индекс кэшируется в data.cache_dir (python make_index.py).
+Сборка на полном каталоге — около минуты, поэтому индекс кэшируется в data.cache_dir (python scripts/make_index.py).
 """
 from __future__ import annotations
 

@@ -57,7 +57,7 @@ def load_data(cfg: Dict[str, Any], verbose: bool = True) -> DataBundle:
 
 
 def load_catalog(cfg: Dict[str, Any]) -> Catalog:
-    """Только каталог треков (без пользователей и запросов): для make_index.py и проверок."""
+    """Только каталог треков (без пользователей и запросов): для scripts/make_index.py и проверок."""
     dcfg = cfg["data"]
     if dcfg["source"] == "crs":
         return _crs_catalog(dcfg["crs"], dcfg)

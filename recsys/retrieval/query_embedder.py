@@ -5,7 +5,7 @@
 google/embeddinggemma-2 через sentence-transformers -> 768 чисел, NaN -> 0, L2-нормировка.
 
 Нужны sentence-transformers и доступ к модели на Hugging Face (модель закрытая: принять лицензию, HF_TOKEN).
-Подготовка один раз на машину — python make_embed.py. Модель грузится при первом запросе и одна на процесс.
+Подготовка один раз на машину — python scripts/make_embed.py. Модель грузится при первом запросе и одна на процесс.
 Устройство: GPU (cuda, float16), если он есть, иначе CPU (float32). В DataSphere кэш моделей — на диске проекта.
 """
 from __future__ import annotations

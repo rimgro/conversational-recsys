@@ -1,10 +1,10 @@
 """Прогон валидации: метрики пайплайна на сплите датасета (по умолчанию test_public).
 
-    python evaluate.py --n-users 1000                       # 1000 пользователей test_public, HNSW с сервера
-    python evaluate.py --n-users all                        # весь сплит
-    python evaluate.py --n-users 1000 --offline             # без сервиса HNSW: relisten, audio, bm25
-    python evaluate.py --set ranker.type=heuristic          # любой параметр конфига
-    python evaluate.py --synthetic                          # без данных: проверить, что код работает
+    python scripts/evaluate.py --n-users 1000                       # 1000 пользователей test_public, HNSW с сервера
+    python scripts/evaluate.py --n-users all                        # весь сплит
+    python scripts/evaluate.py --n-users 1000 --offline             # без сервиса HNSW: relisten, audio, bm25
+    python scripts/evaluate.py --set ranker.type=heuristic          # любой параметр конфига
+    python scripts/evaluate.py --synthetic                          # без данных: проверить, что код работает
 
 Метрика как в датасете — nDCG@20 (для similar_to без трека-образца и его артиста), по query_type.
 Результат — папка outputs/<время>_<сплит>/ (или --run-dir):
@@ -20,7 +20,7 @@
 
 Перед стартом проверяется /health сервиса HNSW: если он недоступен, прогон не начинается (код выхода 2),
 чтобы метрики не посчитались молча без его кандидатов. Адрес и ключ — HNSW_URL, HNSW_API_KEY (из окружения или
-файла .env). Индекс BM25 локальный: один раз собирается и кэшируется (python make_index.py).
+файла .env). Индекс BM25 локальный: один раз собирается и кэшируется (python scripts/make_index.py).
 Полный прогон в облаке без открытого ноутбука: jobs/evaluate.yaml (DataSphere Jobs).
 """
 import argparse
@@ -31,6 +31,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))  # recsys из корня репозитория; запускать из корня: python scripts/<скрипт>.py
+
 import pandas as pd
 import yaml
 
@@ -39,13 +42,11 @@ from recsys.data import load_data
 from recsys.eval import OUTPUT_COLUMNS, evaluate, metrics_by, sources_by, sources_summary
 from recsys.pipeline import Pipeline
 
-HERE = Path(__file__).resolve().parent
-
 
 def config_path(name: str) -> str:
-    """configs/ рядом с текущей папкой (так в DataSphere Jobs) или рядом со скриптом."""
+    """configs/ в текущей папке (так в DataSphere Jobs) или в корне репозитория."""
     local = Path("configs") / name
-    return str(local if local.exists() else HERE / "configs" / name)
+    return str(local if local.exists() else ROOT / "configs" / name)
 
 
 def count(value: str):
@@ -62,7 +63,7 @@ def set_key(cfg: dict, dotted: str, value) -> None:
 
 def git_commit() -> str:
     try:
-        return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=HERE, capture_output=True,
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True,
                               text=True, check=True).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return ""
@@ -96,7 +97,7 @@ def build_config(a: argparse.Namespace):
 
 
 def add_common_args(p: argparse.ArgumentParser) -> None:
-    """Аргументы, общие для evaluate.py и evaluate_candgen.py: данные, конфиг, куда писать."""
+    """Аргументы, общие для scripts/evaluate.py и scripts/evaluate_candgen.py: данные, конфиг, куда писать."""
     p.add_argument("--split", default="test_public", help="сплит датасета (test_public, train)")
     p.add_argument("--data-dir", help="папка датасета (файлы целиком или частями); по умолчанию data.crs.dir")
     p.add_argument("--synthetic", action="store_true", help="синтетика вместо датасета")
@@ -121,7 +122,7 @@ def check_candgen(pipe: Pipeline):
         print(f"[candgen] {name}: {h}")
     if down:
         print(f"сервисы недоступны: {sorted(down)}; проверьте адрес и ключ в .env (HNSW_URL, HNSW_API_KEY), "
-              f"для no_embedder — python make_embed.py; без HNSW — --offline", file=sys.stderr)
+              f"для no_embedder — python scripts/make_embed.py; без HNSW — --offline", file=sys.stderr)
         return remote, None
     return remote, health
 

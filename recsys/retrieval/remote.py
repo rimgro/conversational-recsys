@@ -179,7 +179,7 @@ class HNSWAPIRetriever(_RemoteRetriever):
             return {**out, "status": "no_embedder", "error": "модель для вектора запроса не задана"}
         try:
             self.embedder.encode("health check")
-        except Exception as e:  # нет sentence-transformers / GPU / доступа к модели (python make_embed.py)
+        except Exception as e:  # нет sentence-transformers / GPU / доступа к модели (python scripts/make_embed.py)
             self.embed_error = f"{type(e).__name__}: {e}"
             return {**out, "status": "no_embedder", "error": self.embed_error}
         return out

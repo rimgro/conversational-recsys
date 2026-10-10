@@ -5,6 +5,7 @@ import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "scripts"))  # скрипты: import evaluate, make_embed, ...
 os.environ["RECSYS_ENV_FILE"] = ""  # тесты не зависят от локального .env с адресами и ключами
 
 from recsys.config import load_config  # noqa: E402

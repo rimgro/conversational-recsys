@@ -1,11 +1,11 @@
-"""evaluate.py: прогон валидации пишет метрики и не начинается без сервисов."""
+"""scripts/evaluate.py: прогон валидации пишет метрики и не начинается без сервисов."""
 import json
 import os
 import socket
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
 import evaluate  # noqa: E402
 

@@ -1,9 +1,9 @@
-"""Метрики кандгенов: каждый источник кандидатов отдельно и все вместе, без ранкера и описания (быстрее evaluate.py).
+"""Метрики кандгенов: каждый источник кандидатов отдельно и все вместе, без ранкера и описания (быстрее scripts/evaluate.py).
 
-    python evaluate_candgen.py --n-users 1000                    # все источники (HNSW с сервера)
-    python evaluate_candgen.py --n-users 1000 --offline          # без HNSW: relisten, audio, bm25
-    python evaluate_candgen.py --sources bm25,audio              # только эти источники
-    python evaluate_candgen.py --set retrieval.audio.top_k=500   # любой параметр конфига
+    python scripts/evaluate_candgen.py --n-users 1000                    # все источники (HNSW с сервера)
+    python scripts/evaluate_candgen.py --n-users 1000 --offline          # без HNSW: relisten, audio, bm25
+    python scripts/evaluate_candgen.py --sources bm25,audio              # только эти источники
+    python scripts/evaluate_candgen.py --set retrieval.audio.top_k=500   # любой параметр конфига
 
 Списки: каждый источник и три этапа слияния — rrf (все источники, до фильтров), filtered (после жёстких
 фильтров fusion.py), fused (первые fusion.top_n: то, что получает ранкер). Для каждого списка:
@@ -26,6 +26,9 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))  # recsys из корня репозитория; запускать из корня: python scripts/<скрипт>.py
 
 import pandas as pd
 import yaml

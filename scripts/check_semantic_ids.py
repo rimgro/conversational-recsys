@@ -1,7 +1,7 @@
 """Проверка semantic ID перед обучением двухбашенного кандгена (файлы и формат: docs/semantic_ids.md).
 
-    python check_semantic_ids.py                       # пути из configs/default.yaml (semantic_ids, data.crs.dir)
-    python check_semantic_ids.py --out outputs/semantic_ids_check   # ещё и группы коллизий / дублей в csv
+    python scripts/check_semantic_ids.py                       # пути из configs/default.yaml (semantic_ids, data.crs.dir)
+    python scripts/check_semantic_ids.py --out outputs/semantic_ids_check   # ещё и группы коллизий / дублей в csv
 
 Что печатает:
   1. коды: сколько значений у каждой позиции и сколько реально используется;
@@ -16,6 +16,10 @@ import argparse
 import os
 import re
 import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))  # recsys из корня репозитория; запускать из корня: python scripts/<скрипт>.py
 
 import numpy as np
 import pandas as pd

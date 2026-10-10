@@ -1,11 +1,11 @@
 """Предподсчёт локального BM25-индекса карточек треков (bm25 и relisten): один раз на машину или проект.
 
-    python make_index.py                  # собрать, если в кэше нет, и проверить запросом
-    python make_index.py --rebuild        # пересобрать (например, после изменения рецепта карточки)
-    !python make_index.py                 # из ячейки ноутбука DataSphere
+    python scripts/make_index.py                  # собрать, если в кэше нет, и проверить запросом
+    python scripts/make_index.py --rebuild        # пересобрать (например, после изменения рецепта карточки)
+    !python scripts/make_index.py                 # из ячейки ноутбука DataSphere
 
 Индекс собирается из tracks_meta (data.crs.dir) за ~минуту и кладётся в data.cache_dir (cache/bm25_cards_*.npz);
-evaluate.py, evaluate_candgen.py и ноутбуки дальше только загружают его. Без файла индекс собирается при первом
+scripts/evaluate.py, scripts/evaluate_candgen.py и ноутбуки дальше только загружают его. Без файла индекс собирается при первом
 запуске пайплайна сам. Ключ кэша — tracks_meta (размер, время), рецепт карточки (CARD_VERSION) и bm25_index.k1 / b:
 другой tracks_meta или k1 / b — другой файл. Веса полей (bm25_index.weights) применяются при запросе.
 """
@@ -13,6 +13,10 @@ import argparse
 import os
 import sys
 import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))  # recsys из корня репозитория; запускать из корня: python scripts/<скрипт>.py
 
 from recsys.config import load_config
 from recsys.data.load import load_catalog

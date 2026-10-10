@@ -22,10 +22,10 @@ jupyter lab inference.ipynb   # или открыть в DataSphere
 ```
 
 Вектор запроса для HNSW строим сами (EmbeddingGemma-2, GPU если есть, иначе CPU): один раз на машину
-`python make_embed.py` — проверит пакеты, скачает веса, построит вектор и сверит его с индексом на сервере.
+`python scripts/make_embed.py` — проверит пакеты, скачает веса, построит вектор и сверит его с индексом на сервере.
 
 BM25 локальный: индекс карточек треков собирается из `tracks_meta` за ~20 с и кэшируется в `cache/` — один раз
-`python make_index.py` (или сам при первом запуске). Сервис HNSW включён по умолчанию: задать `HNSW_URL`, `HNSW_API_KEY`
+`python scripts/make_index.py` (или сам при первом запуске). Сервис HNSW включён по умолчанию: задать `HNSW_URL`, `HNSW_API_KEY`
 (файл `.env` в корне — он не в git — или секреты DataSphere). Без него: `USE_CANDGEN = False` в ноутбуке или `--offline`
 у скриптов (остаются `relisten`, `audio`, `bm25`).
 
@@ -53,7 +53,7 @@ BM25 локальный: индекс карточек треков собира
   DataSphere).
 - Если сервис недоступен, его источники возвращают пустой список с предупреждением, остальные работают.
 
-## Валидация (`evaluate.py`)
+## Валидация (`scripts/evaluate.py`)
 
 Метрики пайплайна на сплите датасета: роль валидации играет `test_public` (12k пользователей, 273k запросов),
 `test_private` скрыт. Метрика как в датасете — nDCG@20 с одной целью (для `similar_to` из выдачи убираются трек-образец
@@ -61,10 +61,10 @@ BM25 локальный: индекс карточек треков собира
 (`recall@<источник>`) и всех вместе (`recall@fused`) — качество кандгенов.
 
 ```bash
-python evaluate.py --n-users 1000                   # 1000 пользователей, HNSW с сервера
-python evaluate.py --n-users all                    # весь сплит
-python evaluate.py --n-users 1000 --offline         # без HNSW (relisten, audio, bm25), ~1 мин
-python evaluate.py --set ranker.type=heuristic      # любой параметр конфига
+python scripts/evaluate.py --n-users 1000                   # 1000 пользователей, HNSW с сервера
+python scripts/evaluate.py --n-users all                    # весь сплит
+python scripts/evaluate.py --n-users 1000 --offline         # без HNSW (relisten, audio, bm25), ~1 мин
+python scripts/evaluate.py --set ranker.type=heuristic      # любой параметр конфига
 ```
 
 Результат — `outputs/<время>_<сплит>/`: `metrics.json` (метрики, конфиг, git-коммит, версии индексов сервисов,
@@ -73,20 +73,20 @@ python evaluate.py --set ranker.type=heuristic      # любой парамет�
 Прогон не начнётся, если сервис недоступен (код выхода 2).
 
 Скорость: ~130 запросов/с без HNSW, ~2 запроса/с с HNSW (он отвечает ~0.5 с).
-Короткие прогоны — из ноутбука (`!python evaluate.py ...`) или локально; полный — в DataSphere Jobs без открытого
+Короткие прогоны — из ноутбука (`!python scripts/evaluate.py ...`) или локально; полный — в DataSphere Jobs без открытого
 ноутбука: `datasphere project job execute -p <id проекта> -c jobs/evaluate.yaml` (что подготовить — в начале файла).
 
-### Кандгены отдельно (`evaluate_candgen.py`)
+### Кандгены отдельно (`scripts/evaluate_candgen.py`)
 
 Шаги 1–3 без ранкера и описания (локально ~170 запросов/с): каждый источник кандидатов и три этапа слияния —
 `rrf` (все источники до фильтров), `filtered` (после фильтров и ограничений запроса), `fused` (первые `fusion.top_n`,
 вход ранкера; его nDCG@20 — это выдача stub-ранкера).
 
 ```bash
-python evaluate_candgen.py --n-users 1000                     # все источники
-python evaluate_candgen.py --n-users 1000 --offline           # без сервисов
-python evaluate_candgen.py --sources bm25,audio               # только эти источники
-python evaluate_candgen.py --split train --set fusion.exclude_top_tags=5   # подбирать параметры — на train
+python scripts/evaluate_candgen.py --n-users 1000                     # все источники
+python scripts/evaluate_candgen.py --n-users 1000 --offline           # без сервисов
+python scripts/evaluate_candgen.py --sources bm25,audio               # только эти источники
+python scripts/evaluate_candgen.py --split train --set fusion.exclude_top_tags=5   # подбирать параметры — на train
 ```
 
 Результат — `outputs/<время>_<сплит>_candgen/`: `candgen.csv` (recall, recall@20/50/100/200, nDCG@20, only_this —
@@ -131,7 +131,7 @@ python evaluate_candgen.py --split train --set fusion.exclude_top_tags=5   # п�
 | `relisten` | треки из истории пользователя: совпадение с запросом (тот же BM25 карточки, только по истории) + сколько и как недавно слушал | 93% целей — повторные прослушивания, другие источники их почти не находят |
 | `audio` | MuQ-эмбеддинги: ближайшие к треку-образцу «like X by Y» или к центру вкуса | similar_to (новые треки, похожие по звучанию) |
 | `bm25` | локальный BM25 по карточке трека: теги, жанры, артист, название, год + текст песни + описания (поля с весами `bm25_index.weights`) | genre, era_region, complex, exact, lyrics |
-| `hnsw` | сервис HNSW: вектор реплики (EmbeddingGemma строим сами, `make_embed.py`) | смысл запроса: vague_recall, lyrics_theme, mood |
+| `hnsw` | сервис HNSW: вектор реплики (EmbeddingGemma строим сами, `scripts/make_embed.py`) | смысл запроса: vague_recall, lyrics_theme, mood |
 
 Контракты между шагами: `recsys/schemas.py` (`Request`, `DialogSummary`, `Candidate`, `FusedCandidate`, `RankedTrack`, `Response`).
 
@@ -139,18 +139,19 @@ python evaluate_candgen.py --split train --set fusion.exclude_top_tags=5   # п�
 
 ```
 inference.ipynb            инференс: запрос -> ответ
-evaluate.py                валидация: метрики на test_public -> outputs/
-evaluate_candgen.py        метрики кандгенов: каждый источник и этапы слияния, без ранкера
-make_embed.py              подготовка вектора запроса для HNSW: пакеты, веса EmbeddingGemma, проверка (GPU или CPU)
-jobs/evaluate.yaml         то же в DataSphere Jobs
 experiments.ipynb          эксперименты: разбор по шагам, сравнение вариантов
+examples/candgen.ipynb     проверка сервиса HNSW руками
 configs/default.yaml       все параметры и переключатели
 docs/dataset.md            описание датасета
 docs/candgen_api.md        API сервисов-кандгенов (контракт с нашей частью)
 docs/semantic_ids.md       semantic ID треков: файлы, RQ-VAE по MuQ, что проверено
-examples/candgen.ipynb     проверка сервиса HNSW руками
-make_index.py              предподсчёт локального BM25-индекса карточек (cache/)
-check_semantic_ids.py      проверка semantic ID (коды RQ-VAE в artifacts/semantic_ids/): коллизии, порядок строк, дубли песен
+jobs/evaluate.yaml         scripts/evaluate.py в DataSphere Jobs
+scripts/                   запускать из корня репозитория: python scripts/<скрипт>.py
+  evaluate.py              валидация: метрики на test_public -> outputs/
+  evaluate_candgen.py      метрики кандгенов: каждый источник и этапы слияния, без ранкера
+  make_index.py            предподсчёт локального BM25-индекса карточек (cache/)
+  make_embed.py            подготовка вектора запроса для HNSW: пакеты, веса EmbeddingGemma, проверка (GPU или CPU)
+  check_semantic_ids.py    проверка semantic ID (artifacts/semantic_ids/): коллизии, порядок строк, дубли песен
 recsys/
   schemas.py      контракты между шагами
   config.py       загрузка YAML + overrides (предупреждает об опечатках в ключах)

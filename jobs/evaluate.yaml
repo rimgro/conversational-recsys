@@ -15,7 +15,7 @@ name: recsys-evaluate
 desc: Метрики пайплайна на test_public (HNSW с сервера, BM25 локальный)
 
 cmd: >
-  python3 evaluate.py --split test_public --n-users all
+  python3 scripts/evaluate.py --split test_public --n-users all
   --data-dir ${DATA} --run-dir ${RESULT}
 
 inputs:
@@ -34,7 +34,7 @@ env:
     version: 3.10.13
     requirements-file: requirements.txt
     local-paths:
-      - evaluate.py
+      - scripts/evaluate.py
       - recsys
 
 cloud-instance-types:

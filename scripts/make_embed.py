@@ -1,11 +1,11 @@
 """Подготовка эмбеддинга запросов для HNSW (EmbeddingGemma-2): один раз на машину или проект.
 
-    python make_embed.py              # проверить пакеты, скачать веса, построить вектор, проверить на сервере HNSW
-    python make_embed.py --no-server  # без проверки на сервере
-    !python make_embed.py             # из ячейки ноутбука DataSphere
+    python scripts/make_embed.py              # проверить пакеты, скачать веса, построить вектор, проверить на сервере HNSW
+    python scripts/make_embed.py --no-server  # без проверки на сервере
+    !python scripts/make_embed.py             # из ячейки ноутбука DataSphere
 
 GPU (cuda, float16), если он есть, иначе CPU (float32). Веса: в DataSphere — /home/jupyter/project/hf_cache
-(диск проекта), локально — ~/.cache/huggingface; дальше inference.ipynb и evaluate.py берут модель оттуда.
+(диск проекта), локально — ~/.cache/huggingface; дальше inference.ipynb и scripts/evaluate.py берут модель оттуда.
 Нужен доступ к модели на Hugging Face: принять лицензию google/embeddinggemma-2 и задать HF_TOKEN
 (в DataSphere — секрет проекта; локально — переменная окружения или файл .env). Код выхода 1 при ошибке.
 """
@@ -13,6 +13,10 @@ import argparse
 import os
 import sys
 import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))  # recsys из корня репозитория; запускать из корня: python scripts/<скрипт>.py
 
 from recsys.config import load_env
 from recsys.retrieval.query_embedder import MODEL_NAME, GemmaQueryEmbedder, setup_cache
@@ -119,7 +123,7 @@ def main(argv=None) -> int:
         return 1
     if not a.no_server and not check_server(embedder):
         return 1
-    print("\nготово: inference.ipynb и evaluate.py строят вектор для HNSW сами")
+    print("\nготово: inference.ipynb и scripts/evaluate.py строят вектор для HNSW сами")
     return 0
 
 
