@@ -65,13 +65,17 @@ class Dataset:
 
     @cached_property
     def source_key(self) -> str:
-        """Ключ версии данных для кэшей: размер и время изменения tracks_meta, набор колонок каталога."""
+        """Ключ версии данных для кэшей: содержимое tracks_meta (md5, не время файла — кэш переносится между
+        машинами, например на Google Drive) и набор колонок каталога."""
         if self.source == "synthetic":
             s = self.dcfg.get("synthetic", {})
             return f"syn{s.get('n_tracks')}_{s.get('n_users')}_{s.get('seed')}"
-        st = os.stat(split_path(self.dcfg["dir"], "tracks_meta"))
+        md5 = hashlib.md5()
+        with open(split_path(self.dcfg["dir"], "tracks_meta"), "rb") as f:
+            for block in iter(lambda: f.read(1 << 24), b""):
+                md5.update(block)
         columns = hashlib.md5((",".join(EXTRA_COLUMNS) + CATALOG_VERSION).encode()).hexdigest()[:6]
-        return f"{st.st_size}_{int(st.st_mtime)}_{columns}"
+        return f"{md5.hexdigest()[:12]}_{columns}"
 
     def tracks_meta(self, columns: Sequence[str]) -> pd.DataFrame:
         """Колонки tracks_meta в порядке каталога; нет колонки в файле — пустые строки (синтетика беднее)."""

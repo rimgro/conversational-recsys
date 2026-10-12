@@ -1,6 +1,8 @@
 """Пайплайн целиком: одна реплика (диалог) и прогон частей датасета (python -m recsys)."""
 import json
 
+import numpy as np
+
 import pandas as pd
 import pytest
 
@@ -89,11 +91,18 @@ def test_cli_train_evaluate_submit(cfg, res, tmp_path):
     assert sorted(sub["query_id"]) == sorted(res.dataset.part("submit")["query_id"])
 
 
-def test_training_features_cached(cfg, res):
-    """Признаки ранкера сохраняются блоками: второй раз — с диска, те же данные."""
+def test_features_cached_for_training_and_ranking(cfg, res):
+    """Признаки сохраняются блоками на все запросы части: обучение и ранжирование берут их с диска, те же числа."""
     from recsys import run
     pipe = Pipeline(cfg, res, load_model=False)
     x1, y1, g1, s1 = run.training_data(pipe, "valid")
     x2, y2, g2, s2 = run.training_data(pipe, "valid")
     assert s1 == s2 and (y1 == y2).all() and (g1 == g2).all() and x1.equals(x2)
     assert y1.sum() == s1["groups"] and (pd.Series(g1).diff().dropna() >= 0).all()   # по цели на группу, подряд
+    files = list((__import__("pathlib").Path(cfg["data"]["cache_dir"]) / "features" / "valid").glob("*.parquet"))
+    assert files
+    ranked = Pipeline(cfg, res)                     # stub-ранкер; признаки — из того же кэша
+    chunk = next(run.recommend_part(ranked, "valid", rank=True))
+    for r in chunk[:5]:
+        direct = ranked.rank(r.ctx, r.lists, r.selection)
+        assert (direct.top == r.top).all() and np.allclose(direct.scores, r.scores)
