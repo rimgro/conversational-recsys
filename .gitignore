@@ -6,6 +6,4 @@ __pycache__/
 
 # Исходные данные и воспроизводимые кэши
 music4all_crs/*.parquet
-retrieval_artifacts/candidate_cache/
-submission_public_artifacts/parts/
-**/catboost_info/
+

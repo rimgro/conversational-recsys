@@ -1,0 +1,10 @@
+{
+  "split": "test_public",
+  "rows": 273137,
+  "tracks_per_query": 20,
+  "maximum_response_words": 54,
+  "model": "/Users/aleksei/Desktop/projects_vs_code/baseline_sota2026/adaptive150_catboost_artifacts/catboost_ranker.cbm",
+  "response_generation": "metadata/history templates",
+  "public_qrels_used": false,
+  "submission": "/Users/aleksei/Desktop/projects_vs_code/baseline_sota2026/submission_public.parquet"
+}

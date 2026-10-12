@@ -1,0 +1,16 @@
+{
+  "generators": [
+    "bm25",
+    "tfidf",
+    "history",
+    "query_tfidf",
+    "favorite_artists",
+    "metadata_char",
+    "audio_recent",
+    "metadata_bm25",
+    "history_frequency",
+    "audio_taste",
+    "history_recent"
+  ],
+  "k_per_source": 1000
+}

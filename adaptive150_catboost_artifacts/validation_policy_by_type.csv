@@ -1,0 +1,14 @@
+query_type,n_queries,recall,generators,rrf_constant,text_weight
+audio_attributes,339,0.4778761061946903,bm25+history+favorite_artists+history_frequency+history_recent,60,2
+complex,335,0.8507462686567164,bm25+tfidf+history+query_tfidf+favorite_artists+audio_recent+history_frequency+history_recent,60,2
+era_region,313,0.7859424920127795,bm25+history_frequency+history_recent,60,2
+exact,315,0.9968253968253968,metadata_char,20,1
+genre,309,0.7313915857605178,bm25+history+query_tfidf+favorite_artists+history_frequency+history_recent,60,2
+lyrics_recall,259,0.9806949806949807,bm25+history,60,4
+lyrics_theme,259,0.7142857142857143,bm25+history+history_frequency,60,2
+mood,262,0.5458015267175572,bm25+history+history_recent,60,1
+negative_constraint,319,0.5141065830721003,bm25+history+history_recent,60,1
+novelty,185,0.6216216216216216,bm25+query_tfidf,60,1
+similar_to,464,0.6379310344827587,bm25+query_tfidf,20,1
+situation,311,0.42443729903536975,history,20,1
+vague_recall,330,0.9454545454545454,bm25+tfidf+history+history_frequency+history_recent,60,2
