@@ -25,7 +25,8 @@ data:
 candgen:
   top_k: 1000                  # длина списка каждого кандгена (если у него не задано своё)
   batch_size: 256
-  sources:                     # enabled: false — кандген не считается и не попадает ни в отбор, ни в признаки
+  sources:                     # enabled: false — кандген не считается и не попадает ни в отбор, ни в признаки;
+                               # features: false — участвует в отборе, но не в признаках ранкера (обучен на всём train)
     # тексты (recsys/candgen/text.py): индексы по документам трека, как у team1
     bm25:              {enabled: true}
     metadata_bm25:     {enabled: true}
@@ -45,7 +46,7 @@ candgen:
     audio_seed:        {enabled: false}    # наш: похожие на образец «like X by Y» (similar_to)
     # плотные (recsys/candgen/dense.py): векторы считаются заранее на GPU
     hnsw:              {enabled: false, dir: artifacts/hnsw, online: false}       # scripts/encode_hnsw.py
-    twotower:          {enabled: false, dir: artifacts/twotower/v2, online: false, checkpoint: model.pt}
+    twotower:          {enabled: false, dir: artifacts/twotower/v2, online: false, checkpoint: model.pt, features: false}
   card_index:                  # карточка трека для card_bm25 и relisten (recsys/candgen/card.py)
     k1: 1.2
     b: 0.75

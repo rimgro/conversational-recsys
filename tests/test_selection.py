@@ -141,3 +141,29 @@ def test_tuner_matches_selector(cfg, res):
     tuned = tuner.tune(queries)
     w = np.array([float(tuned["weights"].get(s, 0.0)) for s in pipe.sources])
     assert tuned["weights"] and np.isclose(tuner.recall(queries, w, tuned["rrf_k"]), tuned["recall"])
+
+
+def test_hidden_candgen_not_in_features(cfg, res, requests):
+    """features: false — кандген в отборе участвует, а в признаках его нет ни напрямую, ни через сводные."""
+    from recsys.config import deep_update
+    c = deep_update(cfg, {"candgen": {"sources": {"audio_seed": {"features": False}}},
+                          "selection": {"weights": {"audio_seed": 1}}})
+    candgens = build_candgens(c, res)
+    sources = [g.name for g in candgens]
+    ctxs = res.contexts([r for r in requests if r.meta["query_type"] == "similar_to"][:20])
+    got = retrieve(candgens, ctxs, res)
+    i = next(i for i in range(len(ctxs)) if len(got["audio_seed"][i]))   # образец найден: список не пуст
+    ctx, lists = ctxs[i], {n: got[n][i] for n in sources}
+    sel = Selector(c, res.catalog, sources).select(ctx, lists)
+    fb = FeatureBuilder(c, res, sources)
+    f = fb.build(ctx, lists, sel)
+    assert not [col for col in f.columns if col.startswith("audio_seed")] and "relisten_source_rank" in f
+    visible = [s for s in sources if s != "audio_seed"]
+    sel_vis = Selector(c, res.catalog, visible)
+    k = c["selection"]["union_rrf_k"]
+    all_rrf = sel_vis.scores(lists, {s: 1.0 for s in visible}, k)[sel.ids]
+    score = sel_vis.scores(lists, {s: w for s, w in sel_vis.weights.items() if s in visible}, sel_vis.rrf_k)[sel.ids]
+    assert np.allclose(f["all_rrf_score"], all_rrf) and not np.allclose(f["all_rrf_score"], sel.all_rrf)
+    assert np.allclose(f["selection_rrf_score"], score) and not np.allclose(f["selection_rrf_score"], sel.score)
+    hits = sum((np.isin(sel.ids, lists[s].ids)).astype(float) for s in visible)
+    assert np.allclose(f["all_source_count"], hits)

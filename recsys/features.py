@@ -9,6 +9,10 @@
   rrf        RRF списков bm25 + tfidf + history
   sources    место и попадание в список каждого включённого кандгена, сколько кандгенов нашли, all_rrf
   selection  скор и место в отборе (взвешенный RRF)
+
+Кандген с candgen.sources.<имя>.features: false (twotower: учится на всём train, на ranker_train / valid он
+«помнит» ответы) в признаки не попадает ни напрямую, ни через сводные (all_source_count, all_rrf_score,
+selection_*): в отборе участвует, а ранкер о нём не знает.
   summary    из разбора запроса (DialogSummary): теги запроса и профиля у трека, артист-образец, нарушения
              ограничений (год, bpm, ...), страна / десятилетие — признаки старого пайплайна; по умолчанию выключена
 
@@ -92,11 +96,13 @@ class FeatureBuilder:
         self.cfg = cfg
         self.res = res
         self.sources = list(sources)
+        ccfg = cfg["candgen"]
+        self.hidden = {s for s in self.sources if not ccfg["sources"].get(s, {}).get("features", True)}
+        self.visible = [s for s in self.sources if s not in self.hidden]
         self.groups = list(cfg["features"]["groups"])
         unknown = set(self.groups) - set(GROUPS)
         if unknown:
             raise ValueError(f"features.groups: неизвестные {sorted(unknown)}, есть: {', '.join(GROUPS)}")
-        ccfg = cfg["candgen"]
         self.missing_rank = {s: int(ccfg["sources"][s].get("top_k", ccfg.get("top_k", 1000))) + 1
                              for s in ccfg["sources"]}
         catalog = res.catalog
@@ -207,18 +213,35 @@ class FeatureBuilder:
 
     def _sources(self, v, ctx, lists, sel, ids, ranks):
         count = np.zeros(len(ids), dtype=np.float32)
-        for name in self.sources:
+        for name in self.visible:
             r = ranks.get(name, self._missing(ids, name))
             hit = (r < self.missing_rank[name]).astype(np.float32)
             v[f"{name}_source_rank"] = r
             v[f"{name}_source_hit"] = hit
             count += hit
         v["all_source_count"] = count
-        v["all_rrf_score"] = sel.all_rrf
+        k = float(self.cfg["selection"].get("union_rrf_k", 60))
+        v["all_rrf_score"] = sel.all_rrf if not self.hidden else self._rrf_of(ranks, {s: 1.0 for s in self.visible}, k)
 
     def _selection(self, v, ctx, lists, sel, ids, ranks):
-        v["selection_rrf_score"] = sel.score
-        v["selection_rank"] = selection_rank(sel)
+        if not self.hidden:
+            v["selection_rrf_score"] = sel.score
+            v["selection_rank"] = selection_rank(sel)
+            return
+        scfg = self.cfg["selection"]   # скор отбора без скрытых кандгенов
+        weights = {s: float(w) for s, w in (scfg.get("weights") or {}).items() if w and s in self.visible}
+        score = self._rrf_of(ranks, weights, float(scfg.get("rrf_k", 60)))
+        v["selection_rrf_score"] = score
+        v["selection_rank"] = selection_rank(Selection(ids, score, score, sel.union, sel.n_union, {}))
+
+    def _rrf_of(self, ranks, weights, k: float) -> np.ndarray:
+        """Сумма weight / (k + место) по спискам weights (место — из ranks; нет в списке — 0)."""
+        out = np.zeros(len(next(iter(ranks.values()))) if ranks else 0, dtype=np.float32)
+        for name, w in weights.items():
+            if name in ranks:
+                r = ranks[name]
+                out += np.where(r < self.missing_rank[name], w / (k + r), 0.0).astype(np.float32)
+        return out
 
     def _summary(self, v, ctx, lists, sel, ids, ranks):
         s, prof, catalog = ctx.summary, ctx.profile, self.res.catalog

@@ -40,11 +40,12 @@ twotower:
     learn_temperature: true
 
   train:
-    part: index                  # на каких запросах учиться (recsys/data/parts.py): только index — иначе утечка в ранкер
+    part: train                  # на каких запросах учиться: train — весь сплит (тогда в признаки ранкера twotower не
+                                 # идёт: candgen.sources.twotower.features: false) | index — часть index (recsys/data/parts.py)
     batch_size: 128
     grad_accum: 1
     num_workers: 4
-    val_users: 0.05              # доля пользователей части index в валидацию (целиком, по хешу user_id)
+    val_users: 0.05              # доля пользователей в свою валидацию (целиком, по хешу user_id)
     val_queries: 5000            # сколько запросов валидации считать на каждой проверке
     eval_every: 500              # шагов: валидация, model.pt (если лучше) и checkpoint.pt (для --resume)
     log_every: 50                # строка лога: loss, с/шаг, сколько осталось до конца этапа

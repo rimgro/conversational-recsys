@@ -12,7 +12,7 @@ import torch
 
 from recsys.data.crs import split_path
 from recsys.data.dataset import Dataset
-from recsys.data.parts import part_split
+from recsys.data.parts import PARTS, part_split
 from recsys.semantic_ids import SemanticIDs, load_semantic_ids, random_codes, song_groups
 from recsys.twotower.data import Examples, SequenceBuilder, TokenizerSpec, build_examples, recent_unique
 from recsys.twotower.model import TwoTower, build_model, load_base
@@ -44,13 +44,15 @@ def tracks_meta_path(cfg: Dict[str, Any]) -> str:
 
 def load_examples(cfg: Dict[str, Any], part: str, spec: TokenizerSpec, sid: SemanticIDs,
                   n_users: Optional[int] = None) -> Examples:
-    """Запросы части датасета (recsys/data/parts.py): обучение — только index, чтобы на ranker_train / valid / test
-    модель не видела своих обучающих запросов (иначе ранкер научится ей доверять больше, чем она того стоит).
-    n_users — столько случайных пользователей части (быстрая проверка)."""
+    """Запросы части датасета (recsys/data/parts.py) или всего сплита (part — имя сплита, например train).
+    Обучение по умолчанию — на всём train; поэтому в признаки ранкера twotower не идёт (candgen.sources.twotower.
+    features: false). n_users — столько случайных пользователей (быстрая проверка)."""
     icfg = cfg.get("twotower", {}).get("input", {})
     ds = Dataset(cfg, verbose=False)
-    split = part_split(part, cfg["data"]["parts"])
-    queries = ds.part(part)
+    if part in PARTS:
+        split, queries = part_split(part, cfg["data"]["parts"]), ds.part(part)
+    else:
+        split, queries = part, ds.table(part, "queries")
     if n_users is not None:
         users = queries["user_id"].drop_duplicates()
         users = users.sample(n=min(n_users, len(users)), random_state=cfg["data"]["parts"].get("seed", 42))
