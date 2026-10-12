@@ -12,6 +12,7 @@
 
 Оборвалась сессия (Colab) — та же команда с --resume: продолжит с checkpoint.pt (пишется на каждой валидации)
 с тем же конфигом twotower, что был при старте; если обучение уже закончено — только посчитает metrics.json.
+Нет checkpoint.pt (прогон старой версии) — продолжит с весов model.pt и его шага, оптимизатор заново.
 """
 import argparse
 import json
@@ -59,11 +60,11 @@ def main(argv=None) -> int:
 
     cfg = build_cfg(a)
     run_dir = Path(a.run_dir)
-    ck_path = run_dir / "checkpoint.pt"
-    if a.resume and ck_path.exists():           # тот же конфиг, что при старте: иначе веса и этапы не совпадут
+    saved = [p for p in (run_dir / "checkpoint.pt", run_dir / "model.pt") if p.exists()]
+    if a.resume and saved:           # тот же конфиг, что при старте: иначе веса и этапы не совпадут
         import torch
-        cfg["twotower"] = torch.load(ck_path, map_location="cpu", weights_only=False)["twotower"]
-        print(f"[twotower] --resume: конфиг twotower из {ck_path} (--set для twotower игнорируются)")
+        cfg["twotower"] = torch.load(saved[0], map_location="cpu", weights_only=False)["twotower"]
+        print(f"[twotower] --resume: конфиг twotower из {saved[0]} (--set для twotower игнорируются)")
     tcfg = cfg["twotower"]
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "config.yaml").write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")

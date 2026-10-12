@@ -178,6 +178,26 @@ def load_weights(model: TwoTower, path: str, lora_cfg: Optional[Dict[str, Any]] 
     return ck
 
 
+REWARM_STEPS = 50
+
+
+def resume_from_best(model: TwoTower, path: str, stages: List[Dict[str, Any]], plan: List[int],
+                     lora_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Продолжение без checkpoint.pt (прогон старой версии или checkpoint.pt потерян): веса из model.pt и его
+    этап / шаг (val.stage, val.step — общий номер шага); оптимизатора там нет."""
+    mk = load_weights(model, path, lora_cfg)
+    val = mk["val"]
+    names = [st.get("name") for st in stages]
+    if val.get("stage") not in names:
+        raise ValueError(f"{path}: этап {val.get('stage')} не из конфига ({names})")
+    si = names.index(val["stage"])
+    step_in_stage = int(val["step"]) - sum(plan[:si])
+    if step_in_stage >= plan[si]:                        # сохранено в конце этапа — продолжать со следующего
+        si, step_in_stage = si + 1, 0
+    return {"stage_idx": si, "step_in_stage": step_in_stage, "step_global": int(val["step"]),
+            "best": {k: v for k, v in val.items()}, "done": si >= len(stages)}
+
+
 def fmt_time(seconds: float) -> str:
     seconds = int(seconds)
     return f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
@@ -197,13 +217,25 @@ def train(model: TwoTower, train_ex: Examples, val_ex: Examples, builder: Sequen
     ck_path = os.path.join(run_dir, "checkpoint.pt")
     torch.manual_seed(trc.get("seed", 42))
 
+    bs, accum = trc.get("batch_size", 128), trc.get("grad_accum", 1)
+    stages = trc.get("stages", [])
+    plan = [max(1, int(st.get("epochs", 1.0) * len(train_ex) / (bs * accum))) for st in stages]
+    if trc.get("max_steps"):                             # быстрая проверка: не больше max_steps на этап
+        plan = [min(n, int(trc["max_steps"])) for n in plan]
+
     ck: Optional[Dict[str, Any]] = None
+    best_path = os.path.join(run_dir, "model.pt")
     if resume and os.path.exists(ck_path):
         ck = load_weights(model, ck_path, mcfg.get("lora", {}))
         log(f"[train] продолжаю с {ck_path}: этап {ck['stage_idx'] + 1}, шаг {ck['step_in_stage']} этапа "
             f"(всего {ck['step_global']}), лучшее recall@100 {ck['best']['recall@100']:.4f}")
+    elif resume and os.path.exists(best_path):
+        ck = resume_from_best(model, best_path, stages, plan, mcfg.get("lora", {}))
+        log(f"[train] {ck_path} нет — продолжаю с весов {best_path} (лучшая валидация): этап "
+            f"{ck['stage_idx'] + 1}, шаг {ck['step_in_stage']} этапа (всего {ck['step_global']}); оптимизатор "
+            f"заново, lr разгоняется за {REWARM_STEPS} шагов")
     elif resume:
-        log(f"[train] {ck_path} нет — начинаю сначала")
+        log(f"[train] {ck_path} и {best_path} нет — начинаю сначала")
     model.to(device)
     if mcfg.get("gradient_checkpointing") and device.type == "cuda":
         model.user.base.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
@@ -212,7 +244,6 @@ def train(model: TwoTower, train_ex: Examples, val_ex: Examples, builder: Sequen
     rng = np.random.default_rng(trc.get("seed", 42))
     n_val = min(trc.get("val_queries", 5000), len(val_ex))
     val_small = val_ex.subset(np.sort(rng.choice(len(val_ex), n_val, replace=False))) if n_val else val_ex
-    bs, accum = trc.get("batch_size", 128), trc.get("grad_accum", 1)
     workers = min(trc.get("num_workers", 0), os.cpu_count() or 1)   # в Colab 2 ядра
     loader = torch.utils.data.DataLoader(
         QueryDataset(train_ex, history_dropout=tcfg.get("input", {}).get("history_dropout", 0.0)),
@@ -245,10 +276,6 @@ def train(model: TwoTower, train_ex: Examples, val_ex: Examples, builder: Sequen
                                     "step_global": step_global, "best": best, "done": done,
                                     "optimizer": opt.state_dict(), "scaler": scaler.state_dict()})
 
-    stages = trc.get("stages", [])
-    plan = [max(1, int(st.get("epochs", 1.0) * len(train_ex) / (bs * accum))) for st in stages]
-    if trc.get("max_steps"):                             # быстрая проверка: не больше max_steps на этап
-        plan = [min(n, int(trc["max_steps"])) for n in plan]
     log(f"[train] план: " + ", ".join(f"этап {st.get('name')} — {n} шагов" for st, n in zip(stages, plan))
         + f"; валидация и checkpoint.pt каждые {trc.get('eval_every') or '—'} шагов; лог каждые {log_every} шагов")
     first_stage = ck["stage_idx"] if ck else 0
@@ -262,12 +289,14 @@ def train(model: TwoTower, train_ex: Examples, val_ex: Examples, builder: Sequen
             model.to(device)
         opt = torch.optim.AdamW(param_groups(model, stage, trc.get("weight_decay", 0.01)))
         base_lrs = [g["lr"] for g in opt.param_groups]
-        start = 0
+        start, rewarm = 0, 0
         if ck and si == ck["stage_idx"]:
             start = ck["step_in_stage"]
-            if start > 0:
+            if start > 0 and "optimizer" in ck:
                 opt.load_state_dict(ck["optimizer"])
                 scaler.load_state_dict(ck["scaler"])
+            elif start > 0:                              # с model.pt: моменты Adam с нуля — плавный разгон lr
+                rewarm = REWARM_STEPS
         warmup = int(trc.get("warmup", 0.03) * steps)
         n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
         log(f"[train] этап {name}: шаги {start + 1}..{steps} по {bs}x{accum}, обучаемых параметров "
@@ -277,7 +306,7 @@ def train(model: TwoTower, train_ex: Examples, val_ex: Examples, builder: Sequen
         t_stage, done_here = time.time(), 0
         for step in range(start, steps):
             for g, lr in zip(opt.param_groups, base_lrs):
-                g["lr"] = lr * warmup_cosine(step, steps, warmup)
+                g["lr"] = lr * warmup_cosine(step, steps, warmup) * (min(1.0, (step - start + 1) / rewarm) if rewarm else 1.0)
             for _ in range(accum):
                 try:
                     batch = next(it)

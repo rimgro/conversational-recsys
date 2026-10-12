@@ -234,3 +234,31 @@ def test_resume_after_interruption(tmp_path):
     again = _model()
     best = train(again, tr, val, b, cfg, str(tmp_path), torch.device("cpu"), log=msgs.append, resume=True)
     assert not any("[train] этап" in m for m in msgs) and best["recall@100"] >= 0       # ничего не обучал
+
+
+def test_resume_from_best_without_checkpoint(tmp_path):
+    """Прогон старой версии: есть только model.pt (веса, этап, шаг). resume продолжает с его шага, оптимизатор
+    заново с разгоном lr; model.pt этапа B — с LoRA."""
+    import copy
+    ex = _examples()
+    tr, val = ex.subset(np.arange(0, 64)), ex.subset(np.arange(64, 72))
+    b = SequenceBuilder(_spec(), "find")
+    cfg = copy.deepcopy(TCFG)
+    cfg["train"].update(batch_size=4, eval_every=3, log_every=1,
+                        stages=[{"name": "A", "epochs": 0.5, "lora": False, "lr": 1e-2},      # шаги 1..8
+                                {"name": "B", "epochs": 0.25, "lora": True, "lr": 1e-2, "lr_lora": 1e-3}])  # 9..12
+    train(_model(), tr, val, b, cfg, str(tmp_path), torch.device("cpu"), log=lambda s: None)
+    (tmp_path / "checkpoint.pt").unlink()
+    mk = torch.load(tmp_path / "model.pt", weights_only=False)
+    mk["val"].update(stage="B", step=10)          # как будто лучшее было на 2-м шаге этапа B
+    torch.save(mk, tmp_path / "model.pt")
+    (tmp_path / "log.jsonl").unlink()
+
+    msgs = []
+    model = _model()
+    train(model, tr, val, b, cfg, str(tmp_path), torch.device("cpu"), log=msgs.append, resume=True)
+    assert any("продолжаю с весов" in m and "этап 2, шаг 2" in m for m in msgs)
+    assert any("этап B: шаги 3..4" in m for m in msgs) and not any("этап A:" in m for m in msgs)
+    lrs = [json.loads(line)["lr"] for line in (tmp_path / "log.jsonl").read_text().splitlines() if '"loss"' in line]
+    assert lrs[0] < 1e-2 * 0.1                     # разгон lr после продолжения без оптимизатора
+    assert hasattr(model.user.base, "peft_config") and torch.load(tmp_path / "checkpoint.pt", weights_only=False)["done"]
