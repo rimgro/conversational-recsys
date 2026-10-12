@@ -192,3 +192,45 @@ def test_mps_eager_no_nan():
     dev = torch.device("mps")
     u = encode_examples(m.to(dev), _examples(), SequenceBuilder(_spec(), "find"), dev, batch_size=32)
     assert u.shape[1] == 16 and not np.isnan(u).any()
+
+
+def test_resume_after_interruption(tmp_path):
+    """Обрыв посреди этапа A: checkpoint.pt с последней валидации; resume продолжает A с того же шага
+    (оптимизатор восстановлен), потом этап B с LoRA; законченный прогон resume не переобучает."""
+    import copy
+    ex = _examples()
+    tr, val = ex.subset(np.arange(0, 64)), ex.subset(np.arange(64, 72))
+    b = SequenceBuilder(_spec(), "find")
+    cfg = copy.deepcopy(TCFG)
+    cfg["train"].update(batch_size=4, eval_every=3, log_every=1,
+                        stages=[{"name": "A", "epochs": 0.5, "lora": False, "lr": 1e-2},      # 8 шагов
+                                {"name": "B", "epochs": 0.25, "lora": True, "lr": 1e-2, "lr_lora": 1e-3}])
+    model = _model()
+    real_loss, calls = model.loss, {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 5:
+            raise RuntimeError("сессия оборвалась")
+        return real_loss(*args, **kwargs)
+
+    model.loss = flaky
+    with pytest.raises(RuntimeError, match="оборвалась"):
+        train(model, tr, val, b, cfg, str(tmp_path), torch.device("cpu"), log=lambda s: None)
+    ck = torch.load(tmp_path / "checkpoint.pt", weights_only=False)
+    assert (ck["stage_idx"], ck["step_in_stage"], ck["step_global"]) == (0, 3, 3) and not ck["lora"]
+
+    msgs = []
+    fresh = _model()
+    train(fresh, tr, val, b, cfg, str(tmp_path), torch.device("cpu"), log=msgs.append, resume=True)
+    assert any("продолжаю" in m for m in msgs) and any("этап A: шаги 4..8" in m for m in msgs)
+    steps = [json.loads(line) for line in (tmp_path / "log.jsonl").read_text().splitlines()]
+    assert [r["step"] for r in steps if r.get("stage") == "B" and "loss" in r][-1] == 12   # 8 + 4 шага этапа B
+    assert hasattr(fresh.user.base, "peft_config")
+    ck = torch.load(tmp_path / "checkpoint.pt", weights_only=False)
+    assert ck["done"] and ck["lora"]
+
+    msgs = []
+    again = _model()
+    best = train(again, tr, val, b, cfg, str(tmp_path), torch.device("cpu"), log=msgs.append, resume=True)
+    assert not any("[train] этап" in m for m in msgs) and best["recall@100"] >= 0       # ничего не обучал

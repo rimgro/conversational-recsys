@@ -7,6 +7,8 @@
 Папка прогона (run_dir):
   model.pt          лучшее по recall@100 на валидации: обучаемые веса (без весов Qwen) + конфиг
   last.pt           после последнего шага
+  checkpoint.pt     для продолжения после обрыва (resume): веса, оптимизатор, этап и шаг; пишется на каждой
+                    валидации (train.eval_every) и в конце этапа
   log.jsonl         loss, τ, lr по шагам и метрики валидации
   config.yaml       полный конфиг
 """
@@ -81,15 +83,22 @@ def move(batch: Dict[str, torch.Tensor], device: torch.device) -> Dict[str, torc
 
 @torch.no_grad()
 def encode_examples(model: TwoTower, ex: Examples, builder: SequenceBuilder, device: torch.device,
-                    precision: str = "fp32", batch_size: int = 256, history_len: Optional[int] = None) -> np.ndarray:
-    """Векторы u запросов (n, dim), float32. history_len — обрезать историю (ablation по длине без переобучения)."""
+                    precision: str = "fp32", batch_size: int = 256, history_len: Optional[int] = None,
+                    log: Optional[Callable[[str], None]] = None) -> np.ndarray:
+    """Векторы u запросов (n, dim), float32. history_len — обрезать историю (ablation по длине без переобучения).
+    log — печатать прогресс (раз в ~10%)."""
     model.eval()
     loader = torch.utils.data.DataLoader(QueryDataset(ex, history_len=history_len), batch_size=batch_size,
                                          shuffle=False, collate_fn=builder.collate)
     out = []
-    for batch in loader:
+    t0, every = time.time(), max(1, len(loader) // 10)
+    for i, batch in enumerate(loader, start=1):
         with autocast(device, precision):
             out.append(model.encode_users(move(batch, device)).float().cpu())
+        if log and (i % every == 0 or i == len(loader)):
+            done = min(i * batch_size, len(ex))
+            log(f"[encode] {done}/{len(ex)} запросов, {time.time() - t0:.0f} c, осталось ~"
+                f"{(time.time() - t0) / done * (len(ex) - done) / 60:.0f} мин")
     if out and torch.isnan(torch.cat(out)).any():
         raise RuntimeError("NaN в векторах запросов: на mps нужен attn_implementation eager (device_attention), "
                            "в fp16 — проверьте переполнение")
@@ -153,11 +162,12 @@ def warmup_cosine(step: int, total: int, warmup: int) -> float:
 def save(model: TwoTower, path: str, tcfg: Dict[str, Any], extra: Optional[Dict[str, Any]] = None) -> None:
     lora = hasattr(model.user.base, "peft_config")
     torch.save({"state": trainable_state(model), "twotower": tcfg, "lora": lora, **(extra or {})}, path + ".tmp")
-    os.replace(path + ".tmp", path)
+    os.replace(path + ".tmp", path)   # на Drive не останется половины файла, если сессия оборвётся при записи
 
 
 def load_weights(model: TwoTower, path: str, lora_cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Веса из model.pt / last.pt в уже собранную модель (build_model); LoRA добавляется, если она была."""
+    """Веса из model.pt / last.pt / checkpoint.pt в уже собранную модель (build_model); LoRA добавляется,
+    если она была."""
     ck = torch.load(path, map_location="cpu", weights_only=False)
     if ck.get("lora"):
         add_lora(model, lora_cfg or ck["twotower"].get("model", {}).get("lora", {}))
@@ -168,16 +178,32 @@ def load_weights(model: TwoTower, path: str, lora_cfg: Optional[Dict[str, Any]] 
     return ck
 
 
+def fmt_time(seconds: float) -> str:
+    seconds = int(seconds)
+    return f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
+
+
 def train(model: TwoTower, train_ex: Examples, val_ex: Examples, builder: SequenceBuilder, tcfg: Dict[str, Any],
-          run_dir: str, device: Optional[torch.device] = None, log: Callable[[str], None] = print) -> Dict[str, Any]:
+          run_dir: str, device: Optional[torch.device] = None, log: Callable[[str], None] = print,
+          resume: bool = False) -> Dict[str, Any]:
     """Этапы twotower.train.stages по очереди; валидация каждые eval_every шагов и в конце этапа.
-    -> лучшие метрики валидации."""
+    resume — продолжить с run_dir/checkpoint.pt (этап, шаг, оптимизатор, лучшая валидация); порядок батчей
+    после продолжения новый. -> лучшие метрики валидации."""
     device = device or pick_device()
     mcfg, lcfg, trc = tcfg.get("model", {}), tcfg.get("loss", {}), tcfg.get("train", {})
     precision = device_precision(device, mcfg.get("precision", "bf16"))
     os.makedirs(run_dir, exist_ok=True)
     log_path = os.path.join(run_dir, "log.jsonl")
+    ck_path = os.path.join(run_dir, "checkpoint.pt")
     torch.manual_seed(trc.get("seed", 42))
+
+    ck: Optional[Dict[str, Any]] = None
+    if resume and os.path.exists(ck_path):
+        ck = load_weights(model, ck_path, mcfg.get("lora", {}))
+        log(f"[train] продолжаю с {ck_path}: этап {ck['stage_idx'] + 1}, шаг {ck['step_in_stage']} этапа "
+            f"(всего {ck['step_global']}), лучшее recall@100 {ck['best']['recall@100']:.4f}")
+    elif resume:
+        log(f"[train] {ck_path} нет — начинаю сначала")
     model.to(device)
     if mcfg.get("gradient_checkpointing") and device.type == "cuda":
         model.user.base.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
@@ -192,39 +218,64 @@ def train(model: TwoTower, train_ex: Examples, val_ex: Examples, builder: Sequen
         QueryDataset(train_ex, history_dropout=tcfg.get("input", {}).get("history_dropout", 0.0)),
         batch_size=bs, shuffle=True, drop_last=True, collate_fn=builder.collate,
         num_workers=workers, pin_memory=device.type == "cuda", persistent_workers=workers > 0)
+    log_every = trc.get("log_every", 50)
 
-    best: Dict[str, Any] = {"recall@100": -1.0}
-    step_global, t0 = 0, time.time()
+    best: Dict[str, Any] = ck["best"] if ck else {"recall@100": -1.0}
+    step_global = ck["step_global"] if ck else 0
+    t0 = time.time()
+
+    def write(rec: Dict[str, Any]) -> None:
+        with open(log_path, "a") as f:
+            f.write(json.dumps(rec) + "\n")
 
     def validate(stage_name: str) -> None:
         nonlocal best
         m = evaluate(model, val_small, builder, device, precision, tcfg.get("encode", {}).get("batch_size", 256))
-        rec = {"stage": stage_name, "step": step_global, "val": m, "elapsed_s": round(time.time() - t0)}
-        with open(log_path, "a") as f:
-            f.write(json.dumps(rec) + "\n")
-        log(f"[val] этап {stage_name}, шаг {step_global}: " + ", ".join(f"{k} {v:.4f}" for k, v in m.items())
-            + f"  ({rec['elapsed_s']} c от старта)")
+        write({"stage": stage_name, "step": step_global, "val": m, "elapsed_s": round(time.time() - t0)})
+        msg = ", ".join(f"{k} {v:.4f}" for k, v in m.items())
         if m["recall@100"] > best["recall@100"]:
             best = {**m, "stage": stage_name, "step": step_global}
             save(model, os.path.join(run_dir, "model.pt"), tcfg, {"val": best})
+            msg += "  -> лучшее, сохранено в model.pt"
+        log(f"[val] этап {stage_name}, шаг {step_global}: {msg}  ({fmt_time(time.time() - t0)} от старта)")
         model.train()
 
-    for stage in trc.get("stages", []):
-        name = stage.get("name", "?")
+    def checkpoint(stage_idx: int, step_in_stage: int, opt, done: bool = False) -> None:
+        save(model, ck_path, tcfg, {"stage_idx": stage_idx, "step_in_stage": step_in_stage,
+                                    "step_global": step_global, "best": best, "done": done,
+                                    "optimizer": opt.state_dict(), "scaler": scaler.state_dict()})
+
+    stages = trc.get("stages", [])
+    plan = [max(1, int(st.get("epochs", 1.0) * len(train_ex) / (bs * accum))) for st in stages]
+    if trc.get("max_steps"):                             # быстрая проверка: не больше max_steps на этап
+        plan = [min(n, int(trc["max_steps"])) for n in plan]
+    log(f"[train] план: " + ", ".join(f"этап {st.get('name')} — {n} шагов" for st, n in zip(stages, plan))
+        + f"; валидация и checkpoint.pt каждые {trc.get('eval_every') or '—'} шагов; лог каждые {log_every} шагов")
+    first_stage = ck["stage_idx"] if ck else 0
+    opt = None
+    for si, stage in enumerate(stages):
+        if si < first_stage:
+            continue
+        name, steps = stage.get("name", "?"), plan[si]
         if stage.get("lora"):
             add_lora(model, mcfg.get("lora", {}))
             model.to(device)
-        steps = max(1, int(stage.get("epochs", 1.0) * len(train_ex) / (bs * accum)))
-        if trc.get("max_steps"):                         # быстрая проверка на GPU: не больше max_steps на этап
-            steps = min(steps, int(trc["max_steps"]))
         opt = torch.optim.AdamW(param_groups(model, stage, trc.get("weight_decay", 0.01)))
         base_lrs = [g["lr"] for g in opt.param_groups]
+        start = 0
+        if ck and si == ck["stage_idx"]:
+            start = ck["step_in_stage"]
+            if start > 0:
+                opt.load_state_dict(ck["optimizer"])
+                scaler.load_state_dict(ck["scaler"])
         warmup = int(trc.get("warmup", 0.03) * steps)
         n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        log(f"[train] этап {name}: {steps} шагов по {bs}x{accum}, обучаемых параметров {n_trainable / 1e6:.2f}M")
+        log(f"[train] этап {name}: шаги {start + 1}..{steps} по {bs}x{accum}, обучаемых параметров "
+            f"{n_trainable / 1e6:.2f}M, точность {precision}")
         model.train()
         it = iter(loader)
-        for step in range(steps):
+        t_stage, done_here = time.time(), 0
+        for step in range(start, steps):
             for g, lr in zip(opt.param_groups, base_lrs):
                 g["lr"] = lr * warmup_cosine(step, steps, warmup)
             for _ in range(accum):
@@ -247,15 +298,20 @@ def train(model: TwoTower, train_ex: Examples, val_ex: Examples, builder: Sequen
             scaler.update()
             opt.zero_grad(set_to_none=True)
             step_global += 1
-            if step_global % 50 == 0 or step == 0:
+            done_here += 1
+            if (step + 1) % log_every == 0 or step == start or step + 1 == steps:
+                per_step = (time.time() - t_stage) / done_here
                 rec = {"stage": name, "step": step_global, "loss": out["loss"].item(), "tau": out["tau"].item(),
-                       "lr": opt.param_groups[0]["lr"], "elapsed_s": round(time.time() - t0)}
-                with open(log_path, "a") as f:
-                    f.write(json.dumps(rec) + "\n")
+                       "lr": opt.param_groups[0]["lr"], "s_per_step": round(per_step, 3),
+                       "elapsed_s": round(time.time() - t0)}
+                write(rec)
                 log(f"[train] {name} {step + 1}/{steps}  loss {rec['loss']:.4f}  τ {rec['tau']:.4f}  "
-                    f"{rec['elapsed_s']} c")
-            if trc.get("eval_every") and step_global % trc["eval_every"] == 0:
+                    f"{per_step:.2f} с/шаг  прошло {fmt_time(time.time() - t0)}  до конца этапа ~"
+                    f"{fmt_time(per_step * (steps - step - 1))}")
+            if trc.get("eval_every") and step_global % trc["eval_every"] == 0 and step + 1 < steps:
                 validate(name)
+                checkpoint(si, step + 1, opt)
         validate(name)
+        checkpoint(si + 1, 0, opt, done=si + 1 == len(stages))   # этап закончен: продолжать со следующего
     save(model, os.path.join(run_dir, "last.pt"), tcfg)
     return best

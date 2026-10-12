@@ -38,11 +38,13 @@ def main(argv=None) -> int:
     p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
     p.add_argument("--device")
     a = p.parse_args(argv)
+    sys.stdout.reconfigure(line_buffering=True)   # прогресс сразу, а не пачками
 
     cfg = build_cfg(a)
     run_dir, out = Path(a.run_dir), Path(a.out or a.run_dir)
     out.mkdir(parents=True, exist_ok=True)
     device = pick_device(a.device)
+    print(f"[encode] загружаю модель из {run_dir / a.checkpoint}...")
     model, builder, codes, tcfg = load_trained(cfg, str(run_dir / a.checkpoint), device)
     precision = device_precision(device, tcfg["model"].get("precision", "bf16"))
     bs = tcfg.get("encode", {}).get("batch_size", 256)
@@ -54,8 +56,9 @@ def main(argv=None) -> int:
 
     suffix = f"_h{a.history_len}" if a.history_len is not None else ""
     for split in (a.splits.split(",") if a.splits else tcfg.get("encode", {}).get("splits", ["test_public"])):
+        print(f"[encode] {split}: читаю запросы...")
         ex = load_examples(cfg, split, builder.spec, codes.sid, n_users=a.n_users)
-        u = encode_examples(model, ex, builder, device, precision, bs, history_len=a.history_len)
+        u = encode_examples(model, ex, builder, device, precision, bs, history_len=a.history_len, log=print)
         np.savez(out / f"query_vectors_{split}{suffix}.npz", query_id=ex.query_id.astype(str), vectors=u.astype(np.float16))
         print(f"[encode] {split}: {u.shape} -> {out / f'query_vectors_{split}{suffix}.npz'}")
         has = ex.target >= 0
