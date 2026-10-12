@@ -45,7 +45,7 @@ candgen:
     audio_seed:        {enabled: false}    # наш: похожие на образец «like X by Y» (similar_to)
     # плотные (recsys/candgen/dense.py): векторы считаются заранее на GPU
     hnsw:              {enabled: false, dir: artifacts/hnsw, online: false}       # scripts/encode_hnsw.py
-    twotower:          {enabled: false, dir: artifacts/twotower/main, online: false, checkpoint: model.pt}
+    twotower:          {enabled: false, dir: artifacts/twotower/v2, online: false, checkpoint: model.pt}
   card_index:                  # карточка трека для card_bm25 и relisten (recsys/candgen/card.py)
     k1: 1.2
     b: 0.75

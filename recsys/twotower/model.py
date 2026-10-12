@@ -10,6 +10,18 @@
 
 Лосс (loss.negatives): full — softmax по всем трекам каталога; in_batch — по целям батча (+ logQ).
 Другие записи той же песни (song_groups) не считаются негативами (loss.mask_same_song).
+
+Архитектура twotower.arch (у чекпоинтов без ключа — v1):
+  v1  выше: таблицы кодов входа и трековой башни — разные, трек описывается только кодами.
+  v2  трек = коды RQ-VAE + теги, таблицы общие для обеих башен:
+        токен трека на входе Qwen = E_k[код_k] + Linear(теги трека)        (4 токена на трек, как в v1)
+        r = MLP(concat(LN(среднее E_k[коды] -> 256), LN(теги -> 256)))     представление трека
+        v = L2(Linear(r))                                                  трек-кандидат
+      E_k — те же таблицы SemanticTokenEmbedding, теги — одна таблица TagTable (общие веса башен).
+      shortcut: u = L2(Linear(h) + α · Σ_j a_j v_j): внимание запроса (ключи — r треков истории) к векторам
+      v_j тех же треков-кандидатов и «пустой слот» (ничего из истории: запрос нового, пустая история). Трек из
+      истории, подходящий под запрос, сдвигает u прямо к своему v, не через слои Qwen; читаются сами v_j, а не
+      проекция с нуля — иначе на старте чтение истории — шум, и модель учится выключать его пустым слотом.
 """
 from __future__ import annotations
 
@@ -62,6 +74,8 @@ class SemanticTokenEmbedding(nn.Module):
         self.register_buffer("offsets", torch.from_numpy(offsets), persistent=False)
         self.register_buffer("centroids", torch.from_numpy(flat), persistent=False)
         self.register_buffer("has_centroid", torch.from_numpy(has), persistent=False)
+        row_level = np.repeat(np.arange(len(vocab_sizes)), vocab_sizes)
+        self.register_buffer("row_level", torch.from_numpy(row_level), persistent=False)
         total = int(np.sum(vocab_sizes))
         std = target_norm / math.sqrt(hidden)
         self.delta = nn.Embedding(total, hidden)
@@ -82,6 +96,13 @@ class SemanticTokenEmbedding(nn.Module):
         out = self.delta(idx) + self.level(level)
         if self.proj is not None:
             out = out + self.proj(self.centroids[idx]) * self.has_centroid[idx].unsqueeze(-1)
+        return out
+
+    def table(self) -> torch.Tensor:
+        """Все строки сразу (сумма vocab_sizes, hidden): то же, что forward для каждой (позиция, код)."""
+        out = self.delta.weight + self.level(self.row_level)
+        if self.proj is not None:
+            out = out + self.proj(self.centroids) * self.has_centroid.unsqueeze(-1)
         return out
 
 
@@ -160,17 +181,17 @@ class TwoTower(nn.Module):
             return self.item(self.codes if idx is None else self.codes[idx])
 
     def logits(self, u: torch.Tensor, target: torch.Tensor, negatives: str = "full", logq: bool = False,
-               mask_same_song: bool = True):
+               mask_same_song: bool = True, items: Optional[torch.Tensor] = None):
         """-> (логиты, метки). full: (B, n_tracks), метка — номер цели; in_batch: (B, B), столбец j — цель
         примера j, метка — i. Не негативы (-inf): другие записи той же песни; в in_batch ещё та же цель у другого
-        примера."""
+        примера. items — готовые векторы всех треков (иначе считаются здесь)."""
         with fp32(u.device):
-            return self._logits(u.float(), target, negatives, logq, mask_same_song)
+            return self._logits(u.float(), target, negatives, logq, mask_same_song, items)
 
-    def _logits(self, u, target, negatives, logq, mask_same_song):
+    def _logits(self, u, target, negatives, logq, mask_same_song, items=None):
         g = self.song_groups
         if negatives == "full":
-            logits = u @ self.encode_items().T / self.tau
+            logits = u @ (self.encode_items() if items is None else items).T / self.tau
             labels = target
             if mask_same_song:
                 gt = g[target]
@@ -178,7 +199,7 @@ class TwoTower(nn.Module):
                 same[torch.arange(len(target), device=target.device), target] = False
                 logits = logits.masked_fill(same, float("-inf"))
         elif negatives == "in_batch":
-            logits = u @ self.encode_items(target).T / self.tau
+            logits = u @ (self.encode_items(target) if items is None else items[target]).T / self.tau
             labels = torch.arange(len(target), device=target.device)
             if logq:
                 logits = logits - self.log_q[target].unsqueeze(0)
@@ -196,6 +217,141 @@ class TwoTower(nn.Module):
              mask_same_song: bool = True) -> Dict[str, torch.Tensor]:
         logits, labels = self.logits(self.encode_users(batch), batch["target"], negatives, logq, mask_same_song)
         return {"loss": F.cross_entropy(logits.float(), labels), "tau": self.tau.detach()}
+
+
+# ---------------------------------------------------------------- arch: v2 (коды + теги, общие веса башен)
+
+class TagTable(nn.Module):
+    """Вектор тегов трека: взвешенная сумма эмбеддингов его тегов (tags.py: idx, w — буферы на все треки)."""
+
+    def __init__(self, idx: np.ndarray, w: np.ndarray, n_tags: int, dim: int = 256):
+        super().__init__()
+        self.register_buffer("idx", torch.as_tensor(idx, dtype=torch.long), persistent=False)
+        self.register_buffer("w", torch.as_tensor(w, dtype=torch.float32), persistent=False)
+        self.emb = nn.Embedding(n_tags + 1, dim, padding_idx=n_tags)   # последняя строка — пустое место (pad)
+        nn.init.normal_(self.emb.weight, std=1.0 / math.sqrt(dim))
+        with torch.no_grad():
+            self.emb.weight[n_tags] = 0.0
+
+    def forward(self, items: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """(n, dim) для треков items (по умолчанию — все)."""
+        idx, w = (self.idx, self.w) if items is None else (self.idx[items], self.w[items])
+        return F.embedding_bag(idx, self.emb.weight, per_sample_weights=w, mode="sum",
+                               padding_idx=self.emb.padding_idx)
+
+
+class SharedItemTower(nn.Module):
+    """r = MLP(concat(LN(коды), LN(теги))), v = L2(Linear(r)). Коды — строки той же SemanticTokenEmbedding, что
+    на входе Qwen (общая таблица), спроецированные в d_part; теги — та же TagTable, что добавляется к токенам."""
+
+    def __init__(self, sem: SemanticTokenEmbedding, tags: Optional[TagTable], hidden: int, dim: int = 256,
+                 d_part: int = 256):
+        super().__init__()
+        self.sem, self.tags = sem, tags
+        self.code_proj = nn.Linear(hidden, d_part)
+        self.code_ln = nn.LayerNorm(d_part)
+        d_in = d_part
+        if tags is not None:
+            self.tag_ln = nn.LayerNorm(tags.emb.embedding_dim)
+            d_in += tags.emb.embedding_dim
+        self.mlp = nn.Sequential(nn.Linear(d_in, 2 * dim), nn.GELU(), nn.Linear(2 * dim, dim))
+        self.head = nn.Linear(dim, dim)
+
+    def reps(self, codes: torch.Tensor, tag_vec: Optional[torch.Tensor]) -> torch.Tensor:
+        """codes (n, n_codes) — коды треков; tag_vec (n, d_tag) -> r (n, dim)."""
+        rows = codes + self.sem.offsets
+        table = self.code_proj(self.sem.table())                              # (строк кодов, d_part)
+        parts = [self.code_ln(F.embedding_bag(rows, table, mode="mean"))]
+        if self.tags is not None:
+            parts.append(self.tag_ln(tag_vec))
+        return self.mlp(torch.cat(parts, dim=-1))
+
+    def out(self, r: torch.Tensor) -> torch.Tensor:
+        return F.normalize(self.head(r), dim=-1)
+
+
+class UserTowerV2(UserTower):
+    """Токены треков = коды (общая таблица) + Linear(теги трека); u = L2(Linear(h) + shortcut по истории)."""
+
+    def __init__(self, base: nn.Module, sem: SemanticTokenEmbedding, dim: int, tag_dim: Optional[int],
+                 shortcut: bool = True):
+        super().__init__(base, sem, dim)
+        hidden = base.config.hidden_size
+        self.tag_in = None
+        if tag_dim:
+            self.tag_in = nn.Linear(tag_dim, hidden)
+            nn.init.zeros_(self.tag_in.weight)      # старт: токены как в v1, теги подмешиваются по мере обучения
+            nn.init.zeros_(self.tag_in.bias)
+        self.shortcut = shortcut
+        if shortcut:
+            self.q = nn.Linear(hidden, dim)
+            self.k = nn.Linear(dim, dim)
+            self.null_key = nn.Parameter(torch.zeros(dim))
+            self.null_val = nn.Parameter(torch.zeros(dim))
+            self.alpha = nn.Parameter(torch.tensor(1.0))      # вес прочитанного из истории относительно Linear(h)
+        self.last_null: Optional[torch.Tensor] = None     # вес пустого слота у последнего батча (для разбора)
+
+    def forward(self, batch: Dict[str, torch.Tensor], codes: torch.Tensor, reps: Optional[torch.Tensor] = None,
+                tag_vec: Optional[torch.Tensor] = None, items: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """reps (n_tracks, dim) — r всех треков, tag_vec — их теги, items — их векторы-кандидаты v
+        (TwoTowerV2.track_parts)."""
+        tok, item, level = batch["tok"], batch["item"], batch["level"]
+        text = self.base.get_input_embeddings()(tok)
+        is_track = item >= 0
+        it = item.clamp_min(0)
+        x_track = self.sem.table()[self.sem.offsets[level] + codes[it, level]]
+        if self.tag_in is not None:
+            x_track = x_track + self.tag_in(tag_vec[it])
+        x = torch.where(is_track.unsqueeze(-1), x_track.to(text.dtype), text)
+        h = self.base(inputs_embeds=x, attention_mask=batch["mask"]).last_hidden_state[:, -1]
+        with fp32(h.device):
+            h = h.float()
+            u = self.proj(h)
+            if self.shortcut:
+                u = u + self.alpha * self.history_read(h, reps[it], items[it], is_track & (level == 0))
+            return F.normalize(u, dim=-1)
+
+    def history_read(self, h: torch.Tensor, r: torch.Tensor, v: torch.Tensor, is_hist: torch.Tensor) -> torch.Tensor:
+        """Внимание запроса к трекам истории (по одной позиции на трек; ключи — r, значения — v) + пустой слот
+        -> (B, dim)."""
+        d = r.shape[-1]
+        q = self.q(h)                                                         # (B, dim)
+        scores = torch.einsum("bd,btd->bt", q, self.k(r)) / math.sqrt(d)
+        scores = scores.masked_fill(~is_hist, float("-inf"))
+        null = (q @ self.null_key / math.sqrt(d)).unsqueeze(1)                # (B, 1)
+        a = torch.softmax(torch.cat([scores, null], dim=1), dim=1)
+        self.last_null = a[:, -1].detach()
+        return torch.einsum("bt,btd->bd", a[:, :-1], v) + a[:, -1:] * self.null_val
+
+
+class TwoTowerV2(TwoTower):
+    """TwoTower с общими таблицами башен: r всех треков считается один раз на шаг и идёт и в выход (v),
+    и в shortcut пользовательской башни."""
+
+    def track_parts(self):
+        """-> (r, теги или None, v) всех треков: один раз на шаг, общие для обеих башен."""
+        with fp32(self.codes.device):
+            tag_vec = self.item.tags() if self.item.tags is not None else None
+            reps = self.item.reps(self.codes, tag_vec)
+            return reps, tag_vec, self.item.out(reps)
+
+    def encode_users(self, batch: Dict[str, torch.Tensor], parts=None) -> torch.Tensor:
+        reps, tag_vec, items = parts if parts is not None else self.track_parts()
+        return self.user(batch, self.codes, reps, tag_vec, items)
+
+    def encode_items(self, idx: Optional[torch.Tensor] = None) -> torch.Tensor:
+        v = self.track_parts()[2]
+        return v if idx is None else v[idx]
+
+    def loss(self, batch: Dict[str, torch.Tensor], negatives: str = "full", logq: bool = False,
+             mask_same_song: bool = True) -> Dict[str, torch.Tensor]:
+        parts = self.track_parts()
+        u = self.encode_users(batch, parts)
+        logits, labels = self.logits(u, batch["target"], negatives, logq, mask_same_song, items=parts[2])
+        out = {"loss": F.cross_entropy(logits.float(), labels), "tau": self.tau.detach()}
+        if self.user.last_null is not None:
+            out["null"] = self.user.last_null.mean()
+        return out
 
 
 def input_embedding_norm(base: nn.Module, n: int = 20_000, seed: int = 0) -> float:
@@ -220,16 +376,31 @@ def load_base(name: str, precision: str = "bf16", attn_implementation: Optional[
 
 def build_model(tcfg: Dict[str, Any], base: nn.Module, codes: np.ndarray, vocab_sizes: Sequence[int],
                 codebooks: Optional[np.ndarray] = None, song_groups: Optional[np.ndarray] = None,
-                log_q: Optional[np.ndarray] = None) -> TwoTower:
-    """tcfg — раздел twotower конфига; base — Qwen (load_base) или маленькая модель в тестах."""
+                log_q: Optional[np.ndarray] = None, tags=None) -> TwoTower:
+    """tcfg — раздел twotower конфига; base — Qwen (load_base) или маленькая модель в тестах.
+    tags — TrackTags (tags.py) для arch: v2 с тегами."""
     init = tcfg.get("codes", {}).get("init", "centroids")
     dim = tcfg.get("model", {}).get("dim", 256)
     lcfg = tcfg.get("loss", {})
-    sem = SemanticTokenEmbedding(vocab_sizes, base.config.hidden_size, codebooks,
-                                 target_norm=input_embedding_norm(base), init=init)
-    return TwoTower(UserTower(base, sem, dim), ItemTower(vocab_sizes, dim, codebooks, init=init), codes,
-                    song_groups=song_groups, temperature=lcfg.get("temperature", 0.05),
-                    learn_temperature=lcfg.get("learn_temperature", True), log_q=log_q)
+    hidden = base.config.hidden_size
+    sem = SemanticTokenEmbedding(vocab_sizes, hidden, codebooks, target_norm=input_embedding_norm(base), init=init)
+    kw = dict(song_groups=song_groups, temperature=lcfg.get("temperature", 0.05),
+              learn_temperature=lcfg.get("learn_temperature", True), log_q=log_q)
+    arch = tcfg.get("arch", "v1")
+    if arch == "v1":
+        return TwoTower(UserTower(base, sem, dim), ItemTower(vocab_sizes, dim, codebooks, init=init), codes, **kw)
+    if arch != "v2":
+        raise ValueError(f"twotower.arch: v1 | v2, а не {arch}")
+    tcfg_tags = tcfg.get("tags", {})
+    table = None
+    if tcfg_tags.get("enabled", True):
+        if tags is None:
+            raise ValueError("arch v2 с тегами: нужен tags (build_track_tags)")
+        table = TagTable(tags.idx, tags.w, len(tags.vocab), tcfg_tags.get("dim", 256))
+    user = UserTowerV2(base, sem, dim, table.emb.embedding_dim if table is not None else None,
+                       shortcut=tcfg.get("shortcut", {}).get("enabled", True))
+    item = SharedItemTower(sem, table, hidden, dim)
+    return TwoTowerV2(user, item, codes, **kw)
 
 
 def add_lora(model: TwoTower, lora_cfg: Dict[str, Any]) -> None:

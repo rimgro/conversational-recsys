@@ -65,6 +65,14 @@ def make_builder(cfg: Dict[str, Any], spec: TokenizerSpec, n_codes: int) -> Sequ
     return SequenceBuilder(spec, cfg.get("twotower", {}).get("input", {}).get("instruction", ""), n_codes)
 
 
+def load_tags(cfg: Dict[str, Any], codes: Codes):
+    """Теги треков (arch: v2) из каталога (кэш data.cache_dir), в порядке строк кодов."""
+    from recsys.twotower.tags import build_track_tags
+    t = cfg.get("twotower", {}).get("tags", {})
+    return build_track_tags(Dataset(cfg, verbose=False).catalog.df, codes.sid.track_ids, min_count=t.get("min_count", 5),
+                            max_per_track=t.get("max_per_track", 32), genre_weight=t.get("genre_weight", 0.5))
+
+
 def new_model(cfg: Dict[str, Any], codes: Codes, base=None, log_q: Optional[np.ndarray] = None,
               groups: Optional[np.ndarray] = None, precision: Optional[str] = None, attn: Optional[str] = None):
     """-> (модель, TokenizerSpec). base=None — Qwen из twotower.model.name в точности precision
@@ -77,7 +85,11 @@ def new_model(cfg: Dict[str, Any], codes: Codes, base=None, log_q: Optional[np.n
                               attn or mcfg.get("attn_implementation", "sdpa"))
     if groups is None and tcfg.get("loss", {}).get("mask_same_song", True):
         groups = song_groups(tracks_meta_path(cfg), codes.sid.track_ids)
-    model = build_model(tcfg, base, codes.codes, codes.vocab_sizes, codes.codebooks, song_groups=groups, log_q=log_q)
+    tags = None
+    if tcfg.get("arch", "v1") == "v2" and tcfg.get("tags", {}).get("enabled", True):
+        tags = load_tags(cfg, codes)
+    model = build_model(tcfg, base, codes.codes, codes.vocab_sizes, codes.codebooks, song_groups=groups, log_q=log_q,
+                        tags=tags)
     return model, (TokenizerSpec.from_hf(tok) if tok is not None else None)
 
 

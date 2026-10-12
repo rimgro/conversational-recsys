@@ -147,7 +147,8 @@ recsys/
   explain.py                ответ: шаблон / LLM
   schemas.py                Request, DialogSummary, Context, RankedTrack, Response
   twotower/, semantic_ids.py  двухбашенный кандген и semantic ID
-scripts/                    GPU и подготовка: encode_hnsw, make_embed, train/encode/show_twotower, check_semantic_ids
+scripts/                    GPU и подготовка: encode_hnsw, make_embed, train/encode/show/analyze_twotower,
+                            check_semantic_ids
 inference.ipynb             запрос -> ответ, где цель на каждом шаге, следующая реплика
 experiments.ipynb           сравнение прогонов, разбор запроса по шагам, правила на настоящих запросах
 twotower.ipynb              обучение двухбашенного кандгена на GPU (DataSphere / Colab)
