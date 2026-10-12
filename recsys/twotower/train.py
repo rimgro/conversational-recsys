@@ -202,7 +202,8 @@ def train(model: TwoTower, train_ex: Examples, val_ex: Examples, builder: Sequen
         rec = {"stage": stage_name, "step": step_global, "val": m, "elapsed_s": round(time.time() - t0)}
         with open(log_path, "a") as f:
             f.write(json.dumps(rec) + "\n")
-        log(f"[val] этап {stage_name}, шаг {step_global}: " + ", ".join(f"{k} {v:.4f}" for k, v in m.items()))
+        log(f"[val] этап {stage_name}, шаг {step_global}: " + ", ".join(f"{k} {v:.4f}" for k, v in m.items())
+            + f"  ({rec['elapsed_s']} c от старта)")
         if m["recall@100"] > best["recall@100"]:
             best = {**m, "stage": stage_name, "step": step_global}
             save(model, os.path.join(run_dir, "model.pt"), tcfg, {"val": best})
