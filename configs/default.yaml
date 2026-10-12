@@ -57,6 +57,9 @@ retrieval:                     # источники кандидатов (recsys
   audio:    {enabled: true, top_k: 200}                        # MuQ: похожие на образец (similar_to) или на вкус
   bm25:     {enabled: true, top_k: 200}                        # локальный BM25 по карточке трека (bm25_index)
   hnsw:     {enabled: true, top_k: 200}                        # сервис HNSW: вектор реплики (candgen.hnsw)
+  twotower: {enabled: false, top_k: 200, dir: artifacts/twotower/main, online: false, checkpoint: model.pt}
+                               # двухбашенный: векторы из scripts/encode_twotower.py (recsys/retrieval/twotower.py,
+                               # docs/twotower.md); online: true — новые запросы (демо) кодирует модель (torch, GPU)
 
 bm25_index:                    # локальный BM25 по карточке трека: источник bm25 и совпадение с запросом в relisten
   k1: 1.2                      # (recsys/retrieval/local_index.py); собирается ~минуту и кэшируется в data.cache_dir:
@@ -70,6 +73,8 @@ semantic_ids:                  # коды RQ-VAE по MuQ для двухбаш�
   dir: artifacts/semantic_ids  # docs/semantic_ids.md); проверка: python scripts/check_semantic_ids.py
   codes: semantic_codes.npy    # (n_tracks, 4): 3 кода 0..255 + номер при коллизии; строка = tracks_meta по m4a_id
   checkpoint: rqvae_checkpoint.pt   # энкодер MuQ -> 32, три кодбука 256 x 32
+
+twotower: {}                   # обучение двухбашенного кандгена — configs/twotower.yaml
 
 fusion:
   rrf_k: 60

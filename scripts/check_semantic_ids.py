@@ -14,7 +14,6 @@
 """
 import argparse
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -28,7 +27,7 @@ import pyarrow.parquet as pq
 from evaluate import config_path
 from recsys.config import load_config
 from recsys.data.crs import split_path
-from recsys.semantic_ids import RQVAE, load_semantic_ids, semantic_paths
+from recsys.semantic_ids import RQVAE, load_semantic_ids, semantic_paths, song_key
 
 
 def code_usage(codes: np.ndarray) -> None:
@@ -69,13 +68,9 @@ def reproduce(meta_path: str, ids: np.ndarray, codes: np.ndarray, checkpoint: st
         print("  внимание: коды не воспроизводятся — порядок строк или чекпоинт не те", file=sys.stderr)
 
 
-_VERSION = re.compile(r"\s*[\(\[].*?[\)\]]|\s+-\s+.*$")   # «(Remastered 2011)», «[Live]», «- Radio Edit»
-
-
 def duplicates(meta_path: str, ids: np.ndarray, codes: np.ndarray) -> pd.DataFrame:
     meta = pq.read_table(meta_path, columns=["m4a_id", "m4a_artist", "m4a_song", "isrc"]).to_pandas()
-    meta["song"] = [f"{str(a).lower().strip()} || {_VERSION.sub('', str(t).lower()).strip()}"
-                    for a, t in zip(meta["m4a_artist"], meta["m4a_song"])]
+    meta["song"] = [song_key(a, t) for a, t in zip(meta["m4a_artist"], meta["m4a_song"])]
     isrc = meta["isrc"].where(meta["isrc"].notna() & (meta["isrc"] != ""))
     by_isrc = isrc.map(isrc.value_counts()).fillna(0) > 1
     by_song = meta["song"].map(meta["song"].value_counts()) > 1

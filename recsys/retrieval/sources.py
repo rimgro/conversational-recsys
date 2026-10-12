@@ -1,11 +1,12 @@
 """Шаг 2: источники кандидатов. Каждый: search(ctx) -> [Candidate], по убыванию score.
 
-Четыре источника, у каждого своя роль:
+Источники, у каждого своя роль:
   relisten  свои треки пользователя: совпадение с запросом + вес в истории (93% целей датасета — повторные
             прослушивания, их ищет только он)
   audio     эмбеддинги MuQ: похожие по звуку на трек-образец («like X by Y», similar_to) или на центр вкуса
   bm25      локальный BM25 по карточке трека (local_index.py): топ по всему каталогу
   hnsw      сервис HNSW: семантический поиск по вектору реплики (remote.py)
+  twotower  двухбашенный кандген: готовые векторы запросов и треков (twotower.py, по умолчанию выключен)
 
 bm25 и relisten считают совпадение с запросом по одному индексу карточек (CardIndex) с весами полей
 bm25_index.weights: bm25 — по всем трекам, relisten — только по истории пользователя.
@@ -195,6 +196,11 @@ def build_retrievers(cfg: Dict[str, Any], catalog: Catalog,
             embedder = GemmaQueryEmbedder(**cfg.get("candgen", {}).get("hnsw", {}).get("embedder", {}))
             out.append(HNSWAPIRetriever(name, catalog, CandgenClient.from_config(cfg, "hnsw", c), top_k=k,
                                         embedder=embedder))
+        elif name == "twotower":
+            from recsys.retrieval.twotower import TwoTowerRetriever, online_encoder
+            d = c.get("dir", "artifacts/twotower/main")
+            encoder = online_encoder(cfg, d, c.get("checkpoint", "model.pt")) if c.get("online") else None
+            out.append(TwoTowerRetriever(catalog, d, top_k=k, encoder=encoder))
         else:
-            raise ValueError(f"Неизвестный источник кандидатов: {name} (есть relisten, audio, bm25, hnsw)")
+            raise ValueError(f"Неизвестный источник кандидатов: {name} (есть relisten, audio, bm25, hnsw, twotower)")
     return out

@@ -1,0 +1,50 @@
+# Двухбашенный кандген (recsys/twotower/, docs/twotower.md). Поверх configs/default.yaml:
+#   python scripts/train_twotower.py --config configs/twotower.yaml --run-dir artifacts/twotower/main
+# Любой параметр: --set twotower.loss.negatives=in_batch
+
+twotower:
+  model:
+    name: Qwen/Qwen3-Embedding-0.6B   # пользовательская башня; ablation: Qwen/Qwen3-0.6B
+    dim: 256                     # размер u и v
+    precision: bf16              # bf16 (A100) | fp16 (V100: bf16 нет) | fp32 (CPU, тесты)
+    gradient_checkpointing: true
+    attn_implementation: sdpa
+    lora: {r: 16, alpha: 32, dropout: 0.05, target_modules: [q_proj, k_proj, v_proj, o_proj]}
+
+  codes:
+    source: rqvae                # rqvae — semantic_codes.npy | random — случайные коды той же формы (ablation)
+    init: centroids              # centroids — токены и трековая башня стартуют с центроидов RQ-VAE | random
+    seed: 0                      # для source: random
+
+  input:
+    history_len: 64              # последних уникальных треков истории (от старых к новым), по 4 токена на трек
+    history_dropout: 0.5         # доля примеров train, где история обрезается до случайной длины 0..history_len
+    max_query_tokens: 96
+    instruction: "Given a user's listening history and a request, retrieve the music track the user wants"
+
+  loss:
+    negatives: full              # full — softmax по всему каталогу | in_batch — по целям батча
+    logq: false                  # только для in_batch: поправка на частоту трека как цели
+    mask_same_song: true         # другие записи той же песни (один ISRC / артист + название) — не негативы
+    temperature: 0.05            # начальная τ; обучается
+    learn_temperature: true
+
+  train:
+    batch_size: 128
+    grad_accum: 1
+    num_workers: 4
+    val_users: 0.05              # доля пользователей train в валидацию (целиком, по хешу user_id)
+    val_queries: 5000            # сколько запросов валидации считать на каждой проверке
+    eval_every: 500              # шагов
+    seed: 42
+    weight_decay: 0.01
+    warmup: 0.03                 # доля шагов этапа
+    max_grad_norm: 1.0
+    max_steps: null              # не больше стольких шагов на этап (быстрая проверка: --set twotower.train.max_steps=20)
+    stages:                      # этапы по порядку; epochs — доля эпохи train
+      - {name: A, epochs: 0.3, lora: false, lr: 1.0e-3}               # Qwen заморожен: таблицы, проекция, башня треков
+      - {name: B, epochs: 1.0, lora: true, lr: 5.0e-4, lr_lora: 2.0e-4} # + LoRA на attention
+
+  encode:
+    batch_size: 256
+    splits: [test_public]        # для каких сплитов считать векторы запросов (scripts/encode_twotower.py)

@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Optional, Sequence
 
@@ -139,3 +140,58 @@ def load_semantic_ids(cfg: Dict[str, Any], checkpoint: bool = True) -> SemanticI
     ids = sorted_track_ids(split_path(cfg["data"]["crs"]["dir"], "tracks_meta"))
     codebooks = RQVAE.load(paths["checkpoint"]).codebooks if checkpoint else None
     return SemanticIDs(ids, codes, codebooks)
+
+
+def random_codes(codes: np.ndarray, seed: int = 0) -> np.ndarray:
+    """Случайные коды той же формы (ablation «semantic ID против хеш-ID»): первые позиции — равномерно из тех же
+    диапазонов, последняя — снова номер среди треков с теми же остальными кодами, чтобы коды были уникальны."""
+    rng = np.random.default_rng(seed)
+    n, width = codes.shape
+    out = np.stack([rng.integers(0, int(codes[:, k].max()) + 1, n) for k in range(width - 1)], axis=1)
+    _, inverse = np.unique(out, axis=0, return_inverse=True)
+    inverse = inverse.ravel()
+    order = np.argsort(inverse, kind="stable")
+    rank = np.empty(n, dtype=np.int64)
+    starts = np.r_[0, np.flatnonzero(np.diff(inverse[order])) + 1]
+    for s, e in zip(starts, np.r_[starts[1:], n]):
+        rank[order[s:e]] = np.arange(e - s)
+    return np.c_[out, rank]
+
+
+_VERSION = re.compile(r"\s*[\(\[].*?[\)\]]|\s+-\s+.*$")   # «(Remastered 2011)», «[Live]», «- Radio Edit»
+
+
+def song_key(artist: Any, title: Any) -> str:
+    """«артист || название без версии»: одна песня в разных записях (Live, Remastered, Radio Edit) — один ключ."""
+    return f"{str(artist).lower().strip()} || {_VERSION.sub('', str(title).lower()).strip()}"
+
+
+def song_groups(meta_path: str, track_ids: Sequence[str]) -> np.ndarray:
+    """Номер группы «одна песня» для каждого из track_ids (-1 — других записей нет): один ISRC или одинаковый
+    song_key. Для полного softmax: другие записи цели — не негативы."""
+    import pyarrow.parquet as pq
+    meta = pq.read_table(meta_path, columns=["m4a_id", "m4a_artist", "m4a_song", "isrc"]).to_pandas()
+    meta = meta.drop_duplicates("m4a_id").set_index("m4a_id").reindex([str(t) for t in track_ids])
+    n = len(meta)
+    parent = np.arange(n)
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    keys = [("song", [song_key(a, t) for a, t in zip(meta["m4a_artist"], meta["m4a_song"])]),
+            ("isrc", meta["isrc"].tolist())]
+    for _, values in keys:                  # объединяем треки с общим ключом (ISRC и song_key вместе)
+        first: Dict[str, int] = {}
+        for i, v in enumerate(values):
+            if v is None or (isinstance(v, float) and np.isnan(v)) or v == "":
+                continue
+            j = first.setdefault(v, i)
+            if j != i:
+                parent[find(i)] = find(j)
+    roots = np.array([find(i) for i in range(n)])
+    _, group, sizes = np.unique(roots, return_inverse=True, return_counts=True)
+    group = group.ravel()
+    return np.where(sizes[group] > 1, group, -1)

@@ -31,7 +31,7 @@ def deep_update(base: Dict[str, Any], upd: Optional[Dict[str, Any]], _path: str 
     out = copy.deepcopy(base)
     for k, v in (upd or {}).items():
         key = f"{_path}.{k}" if _path else str(k)
-        if out and k not in out:
+        if base and k not in base:
             warnings.warn(f"config: ключа '{key}' нет в базовом конфиге (опечатка?)", stacklevel=2)
         if isinstance(v, dict) and isinstance(out.get(k), dict):
             out[k] = deep_update(out[k], v, key)

@@ -132,6 +132,7 @@ python scripts/evaluate_candgen.py --split train --set fusion.exclude_top_tags=5
 | `audio` | MuQ-эмбеддинги: ближайшие к треку-образцу «like X by Y» или к центру вкуса | similar_to (новые треки, похожие по звучанию) |
 | `bm25` | локальный BM25 по карточке трека: теги, жанры, артист, название, год + текст песни + описания (поля с весами `bm25_index.weights`) | genre, era_region, complex, exact, lyrics |
 | `hnsw` | сервис HNSW: вектор реплики (EmbeddingGemma строим сами, `scripts/make_embed.py`) | смысл запроса: vague_recall, lyrics_theme, mood |
+| `twotower` | двухбашенный: Qwen по истории (semantic ID) и запросу против вектора трека по его коду; векторы готовые (по умолчанию выключен, [docs/twotower.md](docs/twotower.md)) | в разработке |
 
 Контракты между шагами: `recsys/schemas.py` (`Request`, `DialogSummary`, `Candidate`, `FusedCandidate`, `RankedTrack`, `Response`).
 
@@ -140,11 +141,14 @@ python scripts/evaluate_candgen.py --split train --set fusion.exclude_top_tags=5
 ```
 inference.ipynb            инференс: запрос -> ответ
 experiments.ipynb          эксперименты: разбор по шагам, сравнение вариантов
+twotower.ipynb             обучение двухбашенного кандгена на GPU (DataSphere)
 examples/candgen.ipynb     проверка сервиса HNSW руками
 configs/default.yaml       все параметры и переключатели
 docs/dataset.md            описание датасета
 docs/candgen_api.md        API сервисов-кандгенов (контракт с нашей частью)
 docs/semantic_ids.md       semantic ID треков: файлы, RQ-VAE по MuQ, что проверено
+docs/twotower.md           двухбашенный кандген: модель, лосс, этапы, запуск, ablation
+configs/twotower.yaml      его параметры (поверх default.yaml)
 jobs/evaluate.yaml         scripts/evaluate.py в DataSphere Jobs
 scripts/                   запускать из корня репозитория: python scripts/<скрипт>.py
   evaluate.py              валидация: метрики на test_public -> outputs/
@@ -152,11 +156,14 @@ scripts/                   запускать из корня репозитор
   make_index.py            предподсчёт локального BM25-индекса карточек (cache/)
   make_embed.py            подготовка вектора запроса для HNSW: пакеты, веса EmbeddingGemma, проверка (GPU или CPU)
   check_semantic_ids.py    проверка semantic ID (artifacts/semantic_ids/): коллизии, порядок строк, дубли песен
+  train_twotower.py        обучение двухбашенного кандгена (GPU) -> artifacts/twotower/<прогон>/
+  encode_twotower.py       его векторы треков и запросов в файлы (источник twotower читает их без GPU)
 recsys/
   schemas.py      контракты между шагами
   config.py       загрузка YAML + overrides (предупреждает об опечатках в ключах)
   pipeline.py     пять шагов схемы
-  semantic_ids.py коды RQ-VAE треков, кодбуки, RQ-VAE в numpy (двухбашенный кандген)
+  semantic_ids.py коды RQ-VAE треков, кодбуки, RQ-VAE в numpy, группы «одна песня»
+  twotower/       двухбашенный кандген: data.py (запрос -> токены), model.py (башни, лосс), train.py, build.py
   text.py         нормализация тегов, токенизация, эпохи / страны / языки в запросе
   llm.py          StubLLM, LocalLLM (transformers), extract_json
   dialog.py       шаг 1: RuleSummarizer (заглушка), LLMSummarizer, промпты
@@ -164,6 +171,7 @@ recsys/
     local_index.py  локальный BM25 по карточке трека (поля с весами), кэш индекса
     sources.py    шаг 2: relisten, audio и сборка источников из конфига
     remote.py     шаг 2: сервисы bm25 и hnsw по HTTP
+    twotower.py   шаг 2: двухбашенный кандген по готовым векторам (или OnlineEncoder для демо)
   fusion.py       шаг 3: RRF, фильтры, ограничения запроса, веса источников
   ranking.py      шаг 4: признаки, StubRanker, HeuristicRanker, APIRanker
   explain.py      шаг 5: StubExplainer, LLMExplainer (ответ по-английски)
