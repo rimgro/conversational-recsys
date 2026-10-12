@@ -40,7 +40,13 @@ def pick_device(device: Optional[str] = None) -> torch.device:
 
 
 def device_precision(device: torch.device, precision: str) -> str:
-    return precision if device.type == "cuda" else "fp32"
+    """bf16 / fp16 — только на cuda (на mps и cpu — fp32); bf16 на GPU старше Ampere (T4 в Colab, V100) нет
+    в железе — там fp16."""
+    if device.type != "cuda":
+        return "fp32"
+    if precision == "bf16" and torch.cuda.get_device_capability(device)[0] < 8:
+        return "fp16"
+    return precision
 
 
 def device_attention(device: torch.device, attn: Optional[str]) -> Optional[str]:
@@ -229,6 +235,9 @@ def train(model: TwoTower, train_ex: Examples, val_ex: Examples, builder: Sequen
                 with autocast(device, precision):
                     out = model.loss(move(batch, device), negatives=lcfg.get("negatives", "full"),
                                      logq=lcfg.get("logq", False), mask_same_song=lcfg.get("mask_same_song", True))
+                if not torch.isfinite(out["loss"]):
+                    raise RuntimeError(f"loss {out['loss'].item()} на шаге {step_global + 1} (этап {name}): "
+                                       f"в fp16 — переполнение (нужен GPU с bf16 или меньше lr)")
                 scaler.scale(out["loss"] / accum).backward()
             scaler.unscale_(opt)
             torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad],
