@@ -1,0 +1,17 @@
+{
+  "model": "Qwen/Qwen3-Embedding-0.6B",
+  "purpose": "Core code matched to the current G4 training run; operations remain outside the signed package.",
+  "original_run_signature": "ff8b638238b7d735a3a9511d6ed9bf982321ef183c8b0093b6290fd37ab0b44a",
+  "core_sha256": {
+    "recsys/two_tower_qwen/__init__.py": "4e1497cc0cb54fcd11c82ec915b93d93031bdd2877bd5ece9e762f4f6a91bfd6",
+    "recsys/two_tower_qwen/benchmarking.py": "5cc02f9424792ce4a82e4ba4ce86b993109c6cbd13f7799c3262cb2a18249747",
+    "recsys/two_tower_qwen/bundle.py": "2e22c463aee457611a4b0e12c3b31dd739812b18a0a4d8e560f64135d1fd8a53",
+    "recsys/two_tower_qwen/config.py": "38f87d2daa86e699b674226d39d969f8cd55224a50fab34a4c02006cdafab5e7",
+    "recsys/two_tower_qwen/data.py": "08a3d1dc3807d0ac3f182b813523241982787253ef679b6d9d54c23fdb85892e",
+    "recsys/two_tower_qwen/features.py": "1265666566a7a120704fe05bbc209b8fc78db13320c56f2ea9dc19edee10ffc4",
+    "recsys/two_tower_qwen/metrics.py": "e7108aa5bf66e2a1c3d0371960f41f32db108244aedae77ecd838274cb8c791e",
+    "recsys/two_tower_qwen/model.py": "82b0731493bf6debc7298bc8f028d3d6c24b4aca4d9a1a1349317495ead6b4f6",
+    "recsys/two_tower_qwen/training.py": "a42f3d8bb1fc4070bef71755cefd4423d76bf431d47f61ddcc0565ffc868b3e2",
+    "recsys/track_tower.py": "d2ca9b2d880022e32e02a4dc29c450530a557f627485c0106adae5f4ff6d27fd"
+  }
+}
