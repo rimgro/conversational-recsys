@@ -347,3 +347,20 @@ def test_v2_train_save_load(tmp_path):
     assert np.allclose(u1, u2, atol=1e-5)
     res = evaluate(fresh, val, b, torch.device("cpu"), "fp32", by_type=True)
     assert 0 <= res["null"] <= 1 and all("null" in v for v in res["by_type"].values())
+
+
+def test_v2_shortcut_raises_history_target():
+    """Короткий путь: трек из истории сдвигает u к своему вектору — косинус u с целью из истории растёт с α."""
+    m, _ = _model_v2()
+    m.eval()
+    b = SequenceBuilder(_spec(), "find")
+    batch = b.collate([(np.array([3, 9, 21]), [11], 9), (np.array([1, 30]), [12], 30)])
+    with torch.no_grad():
+        v = m.encode_items()[batch["target"]]
+        m.user.alpha.fill_(0.0)
+        s0 = (m.encode_users(batch) * v).sum(1)
+        m.user.alpha.fill_(5.0)
+        s1 = (m.encode_users(batch) * v).sum(1)
+    assert (s1 > s0).all()
+    is_hist = (batch["item"] >= 0) & (batch["level"] == 0)
+    assert is_hist.sum(1).tolist() == [3, 2]                                   # ключи — по одному на трек истории
