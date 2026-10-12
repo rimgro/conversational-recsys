@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -159,26 +160,67 @@ def candgen(cfg: Dict[str, Any], parts: List[str]) -> Dict[str, Any]:
     return {part: report(cfg, pipe, per_list(cfg, pipe, part, rank=False), part) for part in parts}
 
 
+FEATURES_VERSION = "1"   # поднять, если поменялся код признаков, а конфиг — нет
+FEATURE_BLOCK = 5000     # признаки сохраняются блоками по столько запросов: после остановки прогон продолжит с блока
+
+
+def feature_block_path(pipe: Pipeline, part: str, results: List[Result]) -> Optional[str]:
+    """data.cache_dir/features/<часть>/<ключ>.parquet. Ключ — всё, от чего зависят признаки: запросы блока,
+    кандгены и их параметры, отбор, группы признаков, версия данных."""
+    cache_dir = pipe.cfg["data"].get("cache_dir")
+    if not cache_dir:
+        return None
+    deps = {"queries": [str(r.ctx.request.request_id) for r in results], "data": pipe.res.dataset.source_key,
+            "candgens": [c.cache_key() for c in pipe.candgens], "selection": pipe.cfg["selection"],
+            "features": pipe.cfg["features"], "v": FEATURES_VERSION}
+    key = hashlib.md5(json.dumps(deps, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    return os.path.join(cache_dir, "features", part, f"{key}.parquet")
+
+
+def block_features(pipe: Pipeline, results: List[Result]) -> pd.DataFrame:
+    """Признаки запросов блока, где цель среди отобранных; _label — цель, _query — номер запроса в блоке."""
+    frames = []
+    for i, r in enumerate(results):
+        target = pipe.catalog.pos(r.ctx.request.target_ids[0])
+        if target not in r.selection.ids:
+            continue
+        f = pipe.features.build(r.ctx, r.lists, r.selection)
+        f["_label"] = (r.selection.ids == target).astype(np.int8)
+        f["_query"] = np.int32(i)
+        frames.append(f)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
 def training_data(pipe: Pipeline, part: str) -> Tuple[pd.DataFrame, np.ndarray, np.ndarray, Dict[str, int]]:
     """Признаки, метки и группы для ранкера: запросы, где цель среди отобранных (как у team1: без сэмплирования
-    негативов и без принудительного добавления цели)."""
-    frames, labels, groups = [], [], []
-    n_queries, t0 = 0, time.time()
+    негативов и без принудительного добавления цели). Блоки по FEATURE_BLOCK запросов сохраняются в
+    data.cache_dir/features/: повторный запуск (после остановки, с другими параметрами CatBoost) берёт их с диска."""
+    blocks, n_queries, t0 = [], 0, time.time()
     for chunk in recommend_part(pipe, part, rank=False):
-        n_queries += len(chunk)
-        for r in chunk:
-            target = pipe.catalog.pos(r.ctx.request.target_ids[0])
-            if target not in r.selection.ids:
-                continue
-            frames.append(pipe.features.build(r.ctx, r.lists, r.selection))
-            labels.append((r.selection.ids == target).astype(np.int8))
-            groups.append(np.full(len(r.selection.ids), len(frames) - 1, dtype=np.int32))
-            if len(frames) % 5000 == 0:
-                pipe.res.log(f"{part}: признаки для {len(frames)} запросов за {time.time() - t0:.0f} c")
-    x = pd.concat(frames, ignore_index=True)
-    stats = {"queries": n_queries, "groups": len(frames), "rows": len(x)}
+        for start in range(0, len(chunk), FEATURE_BLOCK):
+            block = chunk[start:start + FEATURE_BLOCK]
+            n_queries += len(block)
+            path = feature_block_path(pipe, part, block)
+            if path and os.path.exists(path):
+                f = pd.read_parquet(path)
+                how = "с диска"
+            else:
+                f = block_features(pipe, block)
+                if path:
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    f.to_parquet(path + ".tmp", index=False)
+                    os.replace(path + ".tmp", path)
+                how = "посчитаны"
+            if len(f):
+                f["_query"] = f["_query"] + (n_queries - len(block))   # номер запроса — сквозной по части
+            blocks.append(f)
+            pipe.res.log(f"{part}: признаки {n_queries} запросов ({how}) за {time.time() - t0:.0f} c")
+    x = pd.concat([b for b in blocks if len(b)], ignore_index=True)
+    labels = x.pop("_label").to_numpy(np.int8)
+    groups = pd.factorize(x.pop("_query"))[0].astype(np.int32)   # 0, 1, 2, ... по порядку, подряд
+    stats = {"queries": n_queries, "groups": int(groups.max()) + 1 if len(groups) else 0, "rows": len(x)}
     pipe.res.log(f"{part}: {stats}")
-    return x, np.concatenate(labels), np.concatenate(groups), stats
+    return x, labels, groups, stats
 
 
 def train(cfg: Dict[str, Any]) -> CatBoostRanker:

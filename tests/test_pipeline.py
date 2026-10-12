@@ -87,3 +87,13 @@ def test_cli_train_evaluate_submit(cfg, res, tmp_path):
     assert list(sub.columns) == ["query_id", "top20", "response"] and sub["query_id"].is_unique
     assert sub["top20"].map(lambda x: len(set(x)) == len(x)).all() and sub["response"].str.len().gt(0).all()
     assert sorted(sub["query_id"]) == sorted(res.dataset.part("submit")["query_id"])
+
+
+def test_training_features_cached(cfg, res):
+    """Признаки ранкера сохраняются блоками: второй раз — с диска, те же данные."""
+    from recsys import run
+    pipe = Pipeline(cfg, res, load_model=False)
+    x1, y1, g1, s1 = run.training_data(pipe, "valid")
+    x2, y2, g2, s2 = run.training_data(pipe, "valid")
+    assert s1 == s2 and (y1 == y2).all() and (g1 == g2).all() and x1.equals(x2)
+    assert y1.sum() == s1["groups"] and (pd.Series(g1).diff().dropna() >= 0).all()   # по цели на группу, подряд
