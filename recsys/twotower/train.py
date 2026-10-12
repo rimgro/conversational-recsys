@@ -187,11 +187,11 @@ def train(model: TwoTower, train_ex: Examples, val_ex: Examples, builder: Sequen
     n_val = min(trc.get("val_queries", 5000), len(val_ex))
     val_small = val_ex.subset(np.sort(rng.choice(len(val_ex), n_val, replace=False))) if n_val else val_ex
     bs, accum = trc.get("batch_size", 128), trc.get("grad_accum", 1)
+    workers = min(trc.get("num_workers", 0), os.cpu_count() or 1)   # в Colab 2 ядра
     loader = torch.utils.data.DataLoader(
         QueryDataset(train_ex, history_dropout=tcfg.get("input", {}).get("history_dropout", 0.0)),
         batch_size=bs, shuffle=True, drop_last=True, collate_fn=builder.collate,
-        num_workers=trc.get("num_workers", 0), pin_memory=device.type == "cuda",
-        persistent_workers=trc.get("num_workers", 0) > 0)
+        num_workers=workers, pin_memory=device.type == "cuda", persistent_workers=workers > 0)
 
     best: Dict[str, Any] = {"recall@100": -1.0}
     step_global, t0 = 0, time.time()

@@ -208,7 +208,9 @@ def input_embedding_norm(base: nn.Module, n: int = 20_000, seed: int = 0) -> flo
 def load_base(name: str, precision: str = "bf16", attn_implementation: Optional[str] = "sdpa"):
     """Qwen из Hugging Face (AutoModel без lm_head) и токенайзер (паддинг слева)."""
     from transformers import AutoModel, AutoTokenizer
-    kwargs: Dict[str, Any] = {"torch_dtype": DTYPES[precision]}
+    import transformers
+    new_api = int(transformers.__version__.split(".")[0]) >= 5 or tuple(map(int, transformers.__version__.split(".")[:2])) >= (4, 56)
+    kwargs: Dict[str, Any] = {"dtype" if new_api else "torch_dtype": DTYPES[precision]}
     if attn_implementation:
         kwargs["attn_implementation"] = attn_implementation
     base = AutoModel.from_pretrained(name, **kwargs)
