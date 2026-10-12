@@ -54,3 +54,6 @@ venv/
 /llm_gemma_service/*.log
 /llm_gemma_service/service-*.json
 /llm_gemma_service/service-*.lock
+
+# прогоны python -m recsys: модели, отчёты, сабмиты
+/runs/

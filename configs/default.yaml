@@ -1,24 +1,105 @@
-# Пути относительные: ноутбук запускается из корня репозитория.
+# Все параметры пайплайна. Запуск: python -m recsys <команда> (recsys/__main__.py); любой ключ — --set a.b=c,
+# ещё YAML поверх — --config. Пути относительные: запускать из корня репозитория.
 
 data:
   source: crs                  # crs — Music4All-CRS (docs/dataset.md) | synthetic — без файлов, для тестов кода
-  eval_split: test_public      # на каких запросах считать метрики
-  max_queries_per_user: 5      # сколько запросов брать на пользователя (у одного — до сотен); null = все
-  max_tags: 20                 # теги Last.fm с наибольшим весом
-  seed: 42
-  cache_dir: cache             # кэш каталога crs (parquet + эмбеддинги .npy)
-  use_cache: true
-
-  synthetic:
-    n_tracks: 5000
-    n_users: 300
+  dir: music4all_crs           # tracks_meta, train, test_public, *_queries, *_qrels
+  cache_dir: cache             # каталог, индексы, выдача кандгенов (всё пересобирается само при изменении)
+  max_tags: 20                 # теги Last.fm с наибольшим весом в каталоге
+  windows:                     # начало окна позитивов = граница истории (docs/dataset.md)
+    train: "2020-01-21"
+    test_public: "2020-02-20"
+    test_private: "2020-02-20"
+  parts:                       # части запросов без утечки (recsys/data/parts.py)
+    train_split: train
+    test_split: test_public
+    buckets:                   # бакет md5 текста запроса: [от, до)
+      index: [0, 6]            # обучаемые кандгены: query_document, query_tfidf, two-tower
+      ranker_train: [6, 9]     # обучение ранкера
+      valid: [9, 10]           # подбор весов отбора и параметров, early stopping
+    exclude_test_texts: true   # тексты, которые есть в test_split, не идут в index
+    sizes: {ranker_train: 30000, valid: 4000, test: 10000, submit: null}   # null — все
     seed: 42
+  synthetic: {n_tracks: 5000, n_users: 300, seed: 42}
 
-  crs:
-    dir: music4all_crs         # tracks_meta, train, test_public, *_queries, *_qrels (docs/dataset.md)
-    splits: [test_public]      # какие сплиты загружать (train — для обучения ранкера)
-    n_users: 300               # сэмпл пользователей на сплит (в test_public 12.2k); null = все
-    seed: 42
+candgen:
+  top_k: 1000                  # длина списка каждого кандгена (если у него не задано своё)
+  batch_size: 256
+  sources:                     # enabled: false — кандген не считается и не попадает ни в отбор, ни в признаки
+    # тексты (recsys/candgen/text.py): индексы по документам трека, как у team1
+    bm25:              {enabled: true}
+    metadata_bm25:     {enabled: true}
+    tfidf:             {enabled: true}
+    query_tfidf:       {enabled: true}     # по запросам части index к треку
+    metadata_char:     {enabled: true}
+    card_bm25:         {enabled: false}    # наш: карточка по полям с весами, по разбору запроса (card.py)
+    # история (recsys/candgen/history.py)
+    history:           {enabled: true}
+    history_recent:    {enabled: true}
+    history_frequency: {enabled: true}
+    favorite_artists:  {enabled: true}
+    relisten:          {enabled: false, top_k: 300, history_weight: 0.3}   # наш: история + совпадение с запросом
+    # звучание MuQ (recsys/candgen/audio.py)
+    audio_taste:       {enabled: true}
+    audio_recent:      {enabled: true}
+    audio_seed:        {enabled: false}    # наш: похожие на образец «like X by Y» (similar_to)
+    # плотные (recsys/candgen/dense.py): векторы считаются заранее на GPU
+    hnsw:              {enabled: false, dir: artifacts/hnsw, online: false}       # scripts/encode_hnsw.py
+    twotower:          {enabled: false, dir: artifacts/twotower/main, online: false, checkpoint: model.pt}
+  card_index:                  # карточка трека для card_bm25 и relisten (recsys/candgen/card.py)
+    k1: 1.2
+    b: 0.75
+    weights: {meta: 1.0, caption: 0.0, lyrics: 1.25, album: 0.0, artist: 0.0, about: 0.3}   # 0 — поле не участвует
+
+selection:                     # отбор кандидатов для ранкера (recsys/selection.py)
+  limit: 150                   # сколько кандидатов получает ранкер
+  rrf_k: 60                    # скор = сумма weight / (rrf_k + место в списке кандгена)
+  weights:                     # одни для всех запросов (query_type модели не известен); кандген без веса в отбор
+                               # не идёт (или вес 0), но остаётся признаком ранкера. Подобрать: python -m recsys tune-policy.
+                               # Сейчас — общая политика team1 (fallback из их candidate_policy.json)
+    {bm25: 2, query_tfidf: 2, history: 1, history_recent: 1, history_frequency: 1, favorite_artists: 1, audio_recent: 1}
+  union_rrf_k: 60              # RRF всех кандгенов без весов: признак all_rrf_score
+  filters: []                  # жёсткие фильтры до отбора: banned (показанное, скипнутое; прослушанное для
+                               # similar_to / novelty), exclude_artist (артист образца, «no X»), new_artist
+                               # (novelty: артист не из истории), exclude_tag («no rap»)
+  exclude_top_tags: 3          # exclude_tag: тег среди первых N тегов трека по весу (0 — любой тег или жанр)
+  min_results: 20              # если фильтры оставили меньше — добираем из всех кандидатов по all_rrf
+
+tune:                          # подбор весов отбора на valid: python -m recsys tune-policy (recsys/tune.py)
+  rrf_ks: [20, 60]
+  text_weights: [1, 2, 4]      # вес текстовых и плотных кандгенов (остальные — 1)
+  min_gain: 0.002              # добавлять кандген, пока recall@limit растёт хотя бы на столько
+
+features:                      # признаки ранкера (recsys/features.py), группы по порядку
+  groups: [text, history, item, rrf, sources, selection]   # + summary — признаки разбора запроса
+
+ranker:
+  type: catboost               # catboost (обучается: python -m recsys train) | stub (порядок отбора)
+  model_dir: null              # папка модели; null — runs/<run.name>/ranker
+  top_k: 20                    # длина выдачи: метрика датасета — nDCG@20
+  threads: 6
+  catboost:
+    loss_function: YetiRank
+    eval_metric: "NDCG:top=20"
+    iterations: 350
+    depth: 6
+    learning_rate: 0.06
+    l2_leaf_reg: 5
+    one_hot_max_size: 20
+    random_seed: 42
+    border_count: 128
+    early_stopping_rounds: 50  # по части valid
+
+eval:
+  k: 20
+  recall_at: [20, 50, 100, 150, 200, 500, 1000]
+
+run:
+  dir: runs                    # runs/<name>/: конфиг, модель ранкера, отчёты, сабмит
+  name: baseline               # имя прогона (--run <имя>)
+  chunk: 20000                 # запросов за раз: столько списков кандгенов держим в памяти
+
+# ---------------------------------------------------------------- ответ и диалог
 
 llm:
   type: stub                   # stub | local | gemma_service (сервис в DataSphere)
@@ -36,38 +117,16 @@ llm:
     chat: true                  # сохранять роли system/user/assistant
     timeout: 300                # ожидание ответа; холодный запуск отдельно до 900 секунд
 
-summarizer:
-  type: rule                   # rule (заглушка) | llm (фолбэк на rule)
+summarizer:                    # разбор запроса -> DialogSummary (recsys/dialog.py): нужен card_bm25, relisten,
+  type: rule                   # audio_seed и фильтрам; rule | llm (фолбэк на rule)
   min_tag_count: 2
 
-candgen:                       # сервис-кандген HNSW по HTTP (API: docs/candgen_api.md): retrieval.hnsw
-  timeout: 5.0                 # секунды на запрос; при ошибке источник пропускается
-  retries: 1                   # повтор при обрыве соединения (таймаут не повторяется)
-  hnsw:
-    url: ${HNSW_URL}           # текстовый семантический поиск (релиз hnsw-v1)
-    api_key: ${HNSW_API_KEY}   # заголовок X-API-Key; пусто = без ключа
-    embedder:                  # вектор запроса строим сами (сервис принимает только vector): recsys/retrieval/
-                               # query_embedder.py; подготовка — python scripts/make_embed.py; без модели hnsw пропускается
-      model_name: google/embeddinggemma-2
-      device: null             # null — сама: cuda, если есть GPU, иначе cpu
-      dtype: null              # null — float16 на GPU, float32 на CPU
+explainer:
+  type: template               # template (по метаданным и истории, как сабмит team1) | stub (список) | llm
+  n_describe: 10
+  max_new_tokens: 300          # для type: llm
 
-retrieval:                     # источники кандидатов (recsys/retrieval/); enabled: false выключает
-  relisten: {enabled: true, top_k: 100, history_weight: 0.3}   # свои треки: 93% целей — повторные прослушивания
-  audio:    {enabled: true, top_k: 200}                        # MuQ: похожие на образец (similar_to) или на вкус
-  bm25:     {enabled: true, top_k: 200}                        # локальный BM25 по карточке трека (bm25_index)
-  hnsw:     {enabled: true, top_k: 200}                        # сервис HNSW: вектор реплики (candgen.hnsw)
-  twotower: {enabled: false, top_k: 200, dir: artifacts/twotower/main, online: false, checkpoint: model.pt}
-                               # двухбашенный: векторы из scripts/encode_twotower.py (recsys/retrieval/twotower.py,
-                               # docs/twotower.md); online: true — новые запросы (демо) кодирует модель (torch, GPU)
-
-bm25_index:                    # локальный BM25 по карточке трека: источник bm25 и совпадение с запросом в relisten
-  k1: 1.2                      # (recsys/retrieval/local_index.py); собирается ~минуту и кэшируется в data.cache_dir:
-  b: 0.75                      # python scripts/make_index.py
-  weights: {meta: 1.0, caption: 0.0, lyrics: 1.25, album: 0.0, artist: 0.0, about: 0.3}   # вес поля в скоре;
-                               # 0 — поле не участвует (индекс пересобирать не нужно). Подобраны на train:
-                               # текст песни даёт основной прирост (relisten nDCG@20 0.21 -> 0.28),
-                               # caption, album, artist по отдельности не помогают
+# ---------------------------------------------------------------- двухбашенный кандген
 
 semantic_ids:                  # коды RQ-VAE по MuQ для двухбашенного кандгена (recsys/semantic_ids.py,
   dir: artifacts/semantic_ids  # docs/semantic_ids.md); проверка: python scripts/check_semantic_ids.py
@@ -75,33 +134,3 @@ semantic_ids:                  # коды RQ-VAE по MuQ для двухбаш�
   checkpoint: rqvae_checkpoint.pt   # энкодер MuQ -> 32, три кодбука 256 x 32
 
 twotower: {}                   # обучение двухбашенного кандгена — configs/twotower.yaml
-
-fusion:
-  rrf_k: 60
-  top_n: 500                   # сколько отдаём в ранкер
-  exclude_listened: false      # 93% целей в датасете — повторные прослушивания, их нельзя выкидывать
-  exclude_top_tags: 3          # «no pop»: выкидывать трек, только если тег среди первых N его тегов по весу;
-                               # 0 — с любым таким тегом или жанром (теряло цель в 0.4% запросов train)
-  constraints:                 # ограничения запроса: год, тональность, bpm, энергия, instrumental, пол вокала, язык
-    use: [year, mode, bpm, energy, instrumental, vocals, lang]   # [] — выкл; country хуже (цель ей верна в ~80%)
-    penalty: 1.0               # вычитается из RRF за каждое нарушение (RRF ~0.01–0.1): нарушители уходят вниз
-    hard: false                # true — выкидывать нарушителей (на train хуже: теряет цель в 1.1% запросов)
-  weights: {relisten: 1.0, audio: 0.5, bm25: 1.0, hnsw: 1.0}
-  no_query_boost: {relisten: 1.5, audio: 1.5}   # запрос пустой («ещё»): больше доверяем истории
-
-ranker:
-  type: stub                   # stub (порядок RRF) | heuristic | api
-  top_k: 20                    # длина выдачи: метрика датасета — nDCG@20
-  api_url: null               # для type: api
-  api_key: null
-  timeout: 2.0                # секунды; при ошибке API -> порядок RRF
-  weights: {}                  # для heuristic, см. HeuristicRanker в recsys/ranking.py
-
-diversity:
-  max_per_artist: 0            # 0 = без ограничения. Ограничение даёт разнообразие, но на офлайн-метриках
-                               # мешает: пользователи возвращаются к своим артистам (синтетика: hit@10 0.66 -> 0.60)
-
-explainer:
-  type: stub                   # stub (приветствие + список) | llm
-  n_describe: 10
-  max_new_tokens: 300          # для type: llm

@@ -1,98 +1,89 @@
+"""Пайплайн целиком: одна реплика (диалог) и прогон частей датасета (python -m recsys)."""
+import json
+
+import pandas as pd
+import pytest
+
+from recsys.__main__ import apply_sources, main
 from recsys.config import deep_update
-from recsys.eval import evaluate
 from recsys.llm import StubLLM
 from recsys.pipeline import Pipeline
+from recsys.resources import Resources
 from recsys.schemas import Message, Request
 
 
-def test_pipeline_runs_and_respects_filters(cfg, data):
-    pipe = Pipeline.from_config(deep_update(cfg, {"fusion": {"exclude_listened": True}}), data.catalog)
-    req = data.requests[0]
-    resp = pipe.run(req, debug=True)
-    assert 0 < len(resp.tracks) <= cfg["ranker"]["top_k"]
-    assert resp.text
-    heard = {h.track_id for h in req.history}
-    assert not heard & set(resp.track_ids)
-    for t in resp.tracks:
-        tags = data.catalog.tags(t.track_id)
-        assert not any(ex in tags for ex in resp.summary.exclude_tags)
+@pytest.fixture(scope="module")
+def pipe(cfg, res):
+    return Pipeline(cfg, res)
 
 
-def test_next_turn_excludes_shown(cfg, data):
-    pipe = Pipeline.from_config(cfg, data.catalog)
-    r1 = pipe.run(data.requests[1])
-    r2 = pipe.run(data.requests[1].next_turn(r1, "more please"))
-    assert not set(r1.track_ids) & set(r2.track_ids)
+def test_run_one_request(pipe, cfg, requests):
+    resp = pipe.run(requests[0], debug=True)
+    assert 0 < len(resp.tracks) <= cfg["ranker"]["top_k"] and resp.text
+    assert [t.rank for t in resp.tracks] == list(range(1, len(resp.tracks) + 1))
+    assert resp.debug["n_selected"] <= cfg["selection"]["limit"] and set(resp.debug["timings"]) >= {"2_candgen"}
+    assert resp.to_frame()["track_id"].tolist() == resp.track_ids
 
 
-def test_cold_start_empty_request(cfg, data):
+def test_next_turn_excludes_shown(pipe, requests):
+    r1 = pipe.run(requests[1])
+    r2 = pipe.run(requests[1].next_turn(r1, "more please"))
+    assert r2.tracks and not set(r1.track_ids) & set(r2.track_ids)
+
+
+def test_cold_start_empty_request(pipe):
     """Ни истории, ни запроса: кандидатов нет, но пайплайн отвечает (в датасете такого не бывает)."""
-    resp = Pipeline.from_config(cfg, data.catalog).run(Request())
+    resp = pipe.run(Request())
     assert resp.tracks == [] and resp.text
 
 
-def test_llm_stub_falls_back(cfg, data):
+def test_filters_in_dialog(cfg, res, requests):
+    c = deep_update(cfg, {"selection": {"filters": ["banned", "exclude_artist", "new_artist", "exclude_tag"]}})
+    req = requests[0]
+    resp = Pipeline(c, res).run(Request(dialog=[Message("user", "some jazz, but no piano")], history=req.history))
+    assert resp.tracks
+    for t in resp.tracks:
+        assert "piano" not in res.catalog.tags(t.track_id)[:3]
+
+
+def test_llm_stub_falls_back(cfg, res):
     c = deep_update(cfg, {"summarizer": {"type": "llm"}, "explainer": {"type": "llm"}})
-    pipe = Pipeline.from_config(c, data.catalog, llm=StubLLM(""))
+    pipe = Pipeline(c, Resources(c, dataset=res.dataset, llm=StubLLM(""), verbose=False))
     resp = pipe.run(Request(dialog=[Message("user", "some calm jazz")]))
     assert resp.summary.source == "rule" and resp.text.startswith("Hi!")
 
 
-def test_evaluate(cfg, data):
-    pipe = Pipeline.from_config(deep_update(cfg, {"ranker": {"type": "heuristic"}}), data.catalog)
-    per_req, mean = evaluate(pipe, data.requests[:20], verbose=False)
-    assert len(per_req) > 0 and 0.0 <= mean["ndcg@20"] <= 1.0
+def test_template_response(pipe, requests):
+    resp = pipe.run(requests[2])
+    assert resp.text.startswith("I recommend") and resp.tracks[0].title in resp.text and len(resp.text.split()) <= 120
 
 
-def test_api_ranker_and_fallback(cfg, data):
-    import json
-    import threading
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self):
-            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            # обратный порядок: чем ниже RRF, тем выше скор
-            scores = [-f["rrf_score"] for f in body["features"]]
-            out = json.dumps({"scores": scores}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(out)
-
-        def log_message(self, *args):
-            pass
-
-    server = HTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        url = f"http://127.0.0.1:{server.server_address[1]}/rank"
-        req = data.requests[0]
-        stub = Pipeline.from_config(cfg, data.catalog).run(req, debug=True)
-        api_cfg = deep_update(cfg, {"ranker": {"type": "api", "api_url": url}, "diversity": {"max_per_artist": 0}})
-        api = Pipeline.from_config(api_cfg, data.catalog).run(req, debug=True)
-        # API вернул обратный порядок RRF (допуск: JSON передаёт до 15 знаков)
-        assert (api.debug["features"]["rrf_score"].diff().dropna() > -1e-12).all()
-        assert set(api.track_ids) != set(stub.track_ids)
-    finally:
-        server.shutdown()
-
-    # сервер недоступен -> ранкер-заглушка
-    down_cfg = deep_update(cfg, {"ranker": {"type": "api", "api_url": "http://127.0.0.1:9/rank", "timeout": 0.5}})
-    pipe = Pipeline.from_config(down_cfg, data.catalog)
-    resp = pipe.run(data.requests[0])
-    assert len(resp.tracks) > 0 and pipe.ranker.last_error
+def test_apply_sources(cfg):
+    c = deep_update(cfg, {})
+    apply_sources(c, "+hnsw,-bm25")
+    assert c["candgen"]["sources"]["hnsw"]["enabled"] and not c["candgen"]["sources"]["bm25"]["enabled"]
+    apply_sources(c, "history,bm25")
+    assert {n for n, s in c["candgen"]["sources"].items() if s["enabled"]} == {"history", "bm25"}
+    with pytest.raises(SystemExit):
+        apply_sources(c, "+nope")
 
 
-def test_metrics_by_family_and_shared_index(cfg, data):
-    from recsys.eval import compare_configs, metrics_by
-    pipe = Pipeline.from_config(cfg, data.catalog)
-    per, _ = evaluate(pipe, data.requests[:30], verbose=False)
-    by = metrics_by(per, "query_type")
-    assert by["n"].sum() == 30 and set(by.index) <= {r.meta["query_type"] for r in data.requests}
-    # локальный индекс relisten передаётся в следующий пайплайн и не строится заново
-    again = Pipeline.from_config(cfg, data.catalog, bm25_index=pipe.bm25_index)
-    assert again.bm25_index is pipe.bm25_index is pipe.retrievers[0].index
-    table = compare_configs(cfg, {"a": {}, "b": {"ranker": {"type": "heuristic"}}}, data.catalog,
-                            data.requests[:20], by="query_type")
-    assert list(table.columns) == ["a", "b"] and "ALL" in table.index
+def test_cli_train_evaluate_submit(cfg, res, tmp_path):
+    """python -m recsys run / submit на синтетике: ранкер учится, отчёты и сабмит пишутся."""
+    common = ["--synthetic", "--run", "t", "--set", f"run.dir={tmp_path}", "--set",
+              f"data.cache_dir={cfg['data']['cache_dir']}", "--set", "data.synthetic={n_tracks: 1500, n_users: 60}",
+              "--set", "ranker.catboost.iterations=20"]
+    assert main(["run", "--parts", "test"] + common) == 0
+    out = tmp_path / "t"
+    assert (out / "ranker" / "model.cbm").exists() and (out / "ranker" / "importance.csv").exists()
+    report = (out / "test" / "report.md").read_text(encoding="utf8")
+    assert "Ранкер (catboost) nDCG@20" in report and "| ranker |" in report and "| union |" in report
+    m = json.loads((out / "test" / "metrics.json").read_text(encoding="utf8"))
+    assert 0 <= m["ndcg@20"] <= 1 and m["recall@150"] <= m["recall_union"]
+    lists = pd.read_csv(out / "test" / "lists.csv", index_col=0)
+    assert {"bm25", "history", "union", "selection", "ranker"} <= set(lists.index)
+    assert main(["submit"] + common) == 0
+    sub = pd.read_parquet(out / "submission.parquet")
+    assert list(sub.columns) == ["query_id", "top20", "response"] and sub["query_id"].is_unique
+    assert sub["top20"].map(lambda x: len(set(x)) == len(x)).all() and sub["response"].str.len().gt(0).all()
+    assert sorted(sub["query_id"]) == sorted(res.dataset.part("submit")["query_id"])

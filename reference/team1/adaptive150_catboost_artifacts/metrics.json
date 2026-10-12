@@ -1,0 +1,265 @@
+{
+  "config": {
+    "seed": 42,
+    "generators": [
+      "bm25",
+      "tfidf",
+      "history",
+      "query_tfidf",
+      "favorite_artists",
+      "metadata_char",
+      "audio_recent",
+      "metadata_bm25",
+      "history_frequency",
+      "audio_taste",
+      "history_recent"
+    ],
+    "top_k_per_source": 1000,
+    "candidate_limit": 150,
+    "cap_config": {
+      "fallback": {
+        "generators": [
+          "bm25",
+          "history",
+          "query_tfidf",
+          "favorite_artists",
+          "audio_recent",
+          "history_frequency",
+          "history_recent"
+        ],
+        "rrf_constant": 60,
+        "text_weight": 2,
+        "max_candidates": 150
+      },
+      "by_query_type": {
+        "audio_attributes": {
+          "generators": [
+            "bm25",
+            "history",
+            "favorite_artists",
+            "history_frequency",
+            "history_recent"
+          ],
+          "rrf_constant": 60,
+          "text_weight": 2,
+          "max_candidates": 150
+        },
+        "complex": {
+          "generators": [
+            "bm25",
+            "tfidf",
+            "history",
+            "query_tfidf",
+            "favorite_artists",
+            "audio_recent",
+            "history_frequency",
+            "history_recent"
+          ],
+          "rrf_constant": 60,
+          "text_weight": 2,
+          "max_candidates": 150
+        },
+        "era_region": {
+          "generators": [
+            "bm25",
+            "history_frequency",
+            "history_recent"
+          ],
+          "rrf_constant": 60,
+          "text_weight": 2,
+          "max_candidates": 150
+        },
+        "exact": {
+          "generators": [
+            "metadata_char"
+          ],
+          "rrf_constant": 20,
+          "text_weight": 1,
+          "max_candidates": 150
+        },
+        "genre": {
+          "generators": [
+            "bm25",
+            "history",
+            "query_tfidf",
+            "favorite_artists",
+            "history_frequency",
+            "history_recent"
+          ],
+          "rrf_constant": 60,
+          "text_weight": 2,
+          "max_candidates": 150
+        },
+        "lyrics_recall": {
+          "generators": [
+            "bm25",
+            "history"
+          ],
+          "rrf_constant": 60,
+          "text_weight": 4,
+          "max_candidates": 150
+        },
+        "lyrics_theme": {
+          "generators": [
+            "bm25",
+            "history",
+            "history_frequency"
+          ],
+          "rrf_constant": 60,
+          "text_weight": 2,
+          "max_candidates": 150
+        },
+        "mood": {
+          "generators": [
+            "bm25",
+            "history",
+            "history_recent"
+          ],
+          "rrf_constant": 60,
+          "text_weight": 1,
+          "max_candidates": 150
+        },
+        "negative_constraint": {
+          "generators": [
+            "bm25",
+            "history",
+            "history_recent"
+          ],
+          "rrf_constant": 60,
+          "text_weight": 1,
+          "max_candidates": 150
+        },
+        "novelty": {
+          "generators": [
+            "bm25",
+            "query_tfidf"
+          ],
+          "rrf_constant": 60,
+          "text_weight": 1,
+          "max_candidates": 150
+        },
+        "similar_to": {
+          "generators": [
+            "bm25",
+            "query_tfidf"
+          ],
+          "rrf_constant": 20,
+          "text_weight": 1,
+          "max_candidates": 150
+        },
+        "situation": {
+          "generators": [
+            "history"
+          ],
+          "rrf_constant": 20,
+          "text_weight": 1,
+          "max_candidates": 150
+        },
+        "vague_recall": {
+          "generators": [
+            "bm25",
+            "tfidf",
+            "history",
+            "history_frequency",
+            "history_recent"
+          ],
+          "rrf_constant": 60,
+          "text_weight": 2,
+          "max_candidates": 150
+        }
+      },
+      "max_candidates": 150
+    },
+    "negative_sampling": false,
+    "iterations": 350,
+    "features": [
+      "bm25_score",
+      "bm25_rank",
+      "bm25_relative_score",
+      "document_coverage",
+      "title_coverage",
+      "artist_coverage",
+      "tag_coverage",
+      "lyrics_coverage",
+      "spotify_popularity",
+      "tfidf_score",
+      "history_retrieval_score",
+      "rrf_score",
+      "history_track_log_count",
+      "history_artist_share",
+      "history_track_recency_days",
+      "history_audio_cosine",
+      "tfidf_rank",
+      "tfidf_relative_score",
+      "history_rank",
+      "query_token_count",
+      "title_phrase_match",
+      "artist_phrase_match",
+      "title_token_recall",
+      "artist_token_recall",
+      "tag_jaccard",
+      "lyrics_bigram_coverage",
+      "title_trigram_dice",
+      "artist_trigram_dice",
+      "bm25_score_share",
+      "tfidf_score_share",
+      "history_score_normalized",
+      "query_type",
+      "bm25_source_rank",
+      "tfidf_source_rank",
+      "history_source_rank",
+      "query_tfidf_source_rank",
+      "favorite_artists_source_rank",
+      "metadata_char_source_rank",
+      "audio_recent_source_rank",
+      "metadata_bm25_source_rank",
+      "history_frequency_source_rank",
+      "audio_taste_source_rank",
+      "history_recent_source_rank",
+      "bm25_source_hit",
+      "tfidf_source_hit",
+      "history_source_hit",
+      "query_tfidf_source_hit",
+      "favorite_artists_source_hit",
+      "metadata_char_source_hit",
+      "audio_recent_source_hit",
+      "metadata_bm25_source_hit",
+      "history_frequency_source_hit",
+      "audio_taste_source_hit",
+      "history_recent_source_hit",
+      "all_source_count",
+      "all_rrf_score",
+      "selection_rrf_score",
+      "selection_rank"
+    ],
+    "trees": 223,
+    "early_stopping_validation": "all capped candidates",
+    "evaluation": "all 150 candidates after cap",
+    "train_queries": 30000,
+    "train_positive_groups": 20688,
+    "train_rows": 3102287,
+    "validation_queries": 4000,
+    "validation_positive_groups": 2834,
+    "validation_rows": 425089
+  },
+  "validation": {
+    "candidate_count": 149.99675,
+    "retrieval_union_count": 5446.2325,
+    "recall_uncapped": 0.9515,
+    "eligible_candidate_count": 148.36325,
+    "recall_union": 0.7085,
+    "catboost_ndcg_at_20": 0.41921417367424557,
+    "catboost_hit_at_20": 0.57275,
+    "n_queries": 4000
+  },
+  "test": {
+    "candidate_count": 149.9753,
+    "retrieval_union_count": 5461.6247,
+    "recall_uncapped": 0.9489,
+    "eligible_candidate_count": 148.4566,
+    "recall_union": 0.6833,
+    "catboost_ndcg_at_20": 0.4136238414988517,
+    "catboost_hit_at_20": 0.5575,
+    "n_queries": 10000
+  }
+}

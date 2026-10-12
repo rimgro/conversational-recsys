@@ -130,14 +130,14 @@ def semantic_paths(cfg: Dict[str, Any]) -> Dict[str, str]:
 
 
 def load_semantic_ids(cfg: Dict[str, Any], checkpoint: bool = True) -> SemanticIDs:
-    """Коды из semantic_ids.dir с m4a_id из tracks_meta (data.crs.dir); checkpoint — ещё и кодбуки RQ-VAE."""
+    """Коды из semantic_ids.dir с m4a_id из tracks_meta (data.dir); checkpoint — ещё и кодбуки RQ-VAE."""
     from recsys.data.crs import split_path
     paths = semantic_paths(cfg)
     if not os.path.exists(paths["codes"]):
         raise FileNotFoundError(f"нет {paths['codes']}: положите коды и чекпоинт RQ-VAE в {os.path.dirname(paths['codes'])} "
                                 f"(docs/semantic_ids.md)")
     codes = np.load(paths["codes"])
-    ids = sorted_track_ids(split_path(cfg["data"]["crs"]["dir"], "tracks_meta"))
+    ids = sorted_track_ids(split_path(cfg["data"]["dir"], "tracks_meta"))
     codebooks = RQVAE.load(paths["checkpoint"]).codebooks if checkpoint else None
     return SemanticIDs(ids, codes, codebooks)
 

@@ -5,9 +5,11 @@ from unittest.mock import Mock
 from recsys.config import deep_update, load_config
 from recsys.llm import build_llm
 from recsys.pipeline import Pipeline
+from recsys.resources import Resources
 
 
-def test_pipeline_reconnects_without_reloading_weights(monkeypatch, cfg, data):
+def test_pipeline_reconnects_without_reloading_weights(monkeypatch, cfg, res):
+    request = res.dataset.requests("test")[0]
     service = importlib.import_module("llm_gemma_service.gemma_service")
     requests = []
 
@@ -31,8 +33,8 @@ def test_pipeline_reconnects_without_reloading_weights(monkeypatch, cfg, data):
                                              "gemma_service": {"timeout": 120}}})
     # Recreate the whole pipeline twice, as after editing/reloading its code.
     for _ in range(2):
-        pipe = Pipeline.from_config(settings, data.catalog)
-        result = pipe.run(data.requests[0])
+        pipe = Pipeline(settings, Resources(settings, dataset=res.dataset, verbose=False))
+        result = pipe.run(request)
         assert result.text == "Enjoy these recommendations."
     launch.assert_not_called()
     assert len(requests) == 2

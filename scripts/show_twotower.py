@@ -5,7 +5,7 @@
     python scripts/show_twotower.py --run-dir artifacts/twotower/main --query-id 0a1b2c3d4e5f6789
 
 Берёт item_vectors.npy, item_ids.npy и query_vectors_<сплит>.npz из --run-dir (scripts/encode_twotower.py),
-тексты запросов и цели — из data.crs.dir. Для каждого запроса: текст, тип, цель (артист — название) и её место
+тексты запросов и цели — из data.dir. Для каждого запроса: текст, тип, цель (артист — название) и её место
 по всему каталогу, top-k модели; цель в выдаче отмечена «<- цель».
 """
 import argparse
@@ -16,17 +16,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))  # recsys из корня репозитория; запускать из корня: python scripts/<скрипт>.py
 
 import numpy as np
-import pyarrow.parquet as pq
 
-from evaluate import config_path
-from recsys.config import load_config
-from recsys.data.crs import split_path
+from recsys.config import config_path, load_config
+from recsys.data.dataset import Dataset
+from recsys.data.parts import part_split
 
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--run-dir", required=True, help="папка с векторами (scripts/encode_twotower.py)")
-    p.add_argument("--split", default="test_public")
+    p.add_argument("--part", default="test", help="часть запросов (recsys/data/parts.py), как у encode_twotower.py")
     p.add_argument("-n", type=int, default=5, help="сколько запросов показать")
     p.add_argument("--k", type=int, default=10, help="сколько треков выдачи показать")
     p.add_argument("--type", help="только этот тип запроса (mood, genre, similar_to, ...)")
@@ -37,16 +36,16 @@ def main(argv=None) -> int:
     run = Path(a.run_dir)
     v = np.load(run / "item_vectors.npy").astype(np.float32)
     ids = np.load(run / "item_ids.npy").astype(str)
-    z = np.load(run / f"query_vectors_{a.split}.npz")
+    z = np.load(run / f"query_vectors_{a.part}.npz")
     qvec = dict(zip(z["query_id"].astype(str), range(len(z["query_id"]))))
     u_all = z["vectors"].astype(np.float32)
 
-    data_dir = load_config(config_path("default.yaml"))["data"]["crs"]["dir"]
-    meta = pq.read_table(split_path(data_dir, "tracks_meta"), columns=["m4a_id", "m4a_artist", "m4a_song"]).to_pandas()
+    cfg = load_config(config_path("default.yaml"))
+    ds = Dataset(cfg, verbose=False)
+    meta = ds.tracks_meta(["m4a_id", "m4a_artist", "m4a_song"])
     name = dict(zip(meta["m4a_id"], meta["m4a_artist"] + " — " + meta["m4a_song"]))
-    queries = pq.read_table(split_path(data_dir, f"{a.split}_queries"),
-                            columns=["query_id", "query", "query_type"]).to_pandas()
-    qrels = pq.read_table(split_path(data_dir, f"{a.split}_qrels"), columns=["query_id", "target_m4a_id"]).to_pandas()
+    queries = ds.part(a.part)[["query_id", "query", "query_type"]]
+    qrels = ds.table(part_split(a.part, cfg["data"]["parts"]), "qrels")[["query_id", "target_m4a_id"]]
     q = queries.merge(qrels, on="query_id")
     q = q[q["query_id"].isin(qvec)]
     if a.query_id:

@@ -1,0 +1,3 @@
+split,n_queries,base3_hits,union_hits,recall_base3,recall_all11,cap150_hits,recall_cap150
+validation,4000,3652,3806,0.913,0.9515,2834,0.7085
+test,10000,9071,9489,0.9071,0.9489,6833,0.6833

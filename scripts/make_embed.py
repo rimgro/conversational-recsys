@@ -5,7 +5,7 @@
     !python scripts/make_embed.py             # из ячейки ноутбука DataSphere
 
 GPU (cuda, float16), если он есть, иначе CPU (float32). Веса: в DataSphere — /home/jupyter/project/hf_cache
-(диск проекта), локально — ~/.cache/huggingface; дальше inference.ipynb и scripts/evaluate.py берут модель оттуда.
+(диск проекта), локально — ~/.cache/huggingface; дальше scripts/encode_hnsw.py и inference.ipynb (online) берут модель оттуда.
 Нужен доступ к модели на Hugging Face: принять лицензию google/embeddinggemma-2 и задать HF_TOKEN
 (в DataSphere — секрет проекта; локально — переменная окружения или файл .env). Код выхода 1 при ошибке.
 """
@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))  # recsys из корня репозитория; запускать из корня: python scripts/<скрипт>.py
 
 from recsys.config import load_env
-from recsys.retrieval.query_embedder import MODEL_NAME, GemmaQueryEmbedder, setup_cache
+from recsys.candgen.query_embedder import MODEL_NAME, GemmaQueryEmbedder, setup_cache
 
 INSTALL_DATASPHERE = """  # DataSphere: драйвер NVIDIA с CUDA 12.x — torch под CUDA 12.6, затем перезапустить ядро
   !pip install --progress-bar on "torch==2.11.0" "torchaudio==2.11.0" "torchvision==0.26.0" --index-url https://download.pytorch.org/whl/cu126
@@ -92,7 +92,7 @@ def build(embedder: GemmaQueryEmbedder) -> bool:
 
 def check_server(embedder: GemmaQueryEmbedder) -> bool:
     step("4. совместимость с индексом на сервере HNSW")
-    from recsys.retrieval.remote import CandgenClient, CandgenError
+    from recsys.candgen.remote import CandgenClient, CandgenError
     if not os.environ.get("HNSW_URL"):
         print("HNSW_URL не задан (.env / секрет проекта) — проверка пропущена")
         return True
@@ -123,7 +123,7 @@ def main(argv=None) -> int:
         return 1
     if not a.no_server and not check_server(embedder):
         return 1
-    print("\nготово: inference.ipynb и scripts/evaluate.py строят вектор для HNSW сами")
+    print("\nготово: векторы запросов для кандгена hnsw — python scripts/encode_hnsw.py")
     return 0
 
 

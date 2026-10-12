@@ -26,8 +26,7 @@ sys.path.insert(0, str(ROOT))  # recsys из корня репозитория; 
 import numpy as np
 import yaml
 
-from evaluate import config_path, git_commit, set_key
-from recsys.config import load_config
+from recsys.config import config_path, git_commit, load_config, set_key
 from recsys.twotower.build import load_codes, load_examples, make_builder, new_model
 from recsys.twotower.data import TokenizerSpec
 from recsys.twotower.model import load_base
@@ -79,8 +78,9 @@ def main(argv=None) -> int:
                           device_attention(device, tcfg["model"].get("attn_implementation", "sdpa")))
     spec = TokenizerSpec.from_hf(tok)
     t = time.time()
-    print("[twotower] читаю train и токенизирую запросы (на всём train — пара минут)...")
-    ex = load_examples(cfg, "train", spec, codes.sid, n_users=a.n_users)
+    part = tcfg["train"].get("part", "index")
+    print(f"[twotower] читаю часть {part} и токенизирую запросы (пара минут)...")
+    ex = load_examples(cfg, part, spec, codes.sid, n_users=a.n_users)
     print(f"[twotower] прочитано за {time.time() - t:.0f} c")
     ex = ex.subset(np.flatnonzero(ex.target >= 0))
     train_ex, val_ex = split_train_val(ex, tcfg["train"].get("val_users", 0.05))

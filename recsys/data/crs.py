@@ -1,4 +1,4 @@
-"""Music4All-CRS (описание: docs/dataset.md), файлы в папке data.crs.dir.
+"""Music4All-CRS (описание: docs/dataset.md), файлы в папке data.dir.
 
 tracks_meta.parquet               каталог: 64k треков, теги, жанры, аудио-атрибуты, тексты, эмбеддинги MuQ
 train / test_public.parquet       строка = пользователь: история (все прослушивания до окна) и профиль
@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
@@ -63,6 +64,10 @@ def _split_csv(raw: Any) -> List[str]:
 
 
 def catalog_from_meta(meta: pd.DataFrame, max_tags: int = 20) -> Catalog:
+    """Строки — по возрастанию m4a_id: номер трека один и тот же в каталоге, индексах кандгенов, semantic ID
+    и у бейзлайна team1 (tracks_meta уже так отсортирован, синтетика — нет)."""
+    meta = meta.sort_values("m4a_id", kind="stable").reset_index(drop=True)
+
     def pick(primary: str, fallback: str) -> pd.Series:
         a = meta[primary] if primary in meta else pd.Series([None] * len(meta))
         b = meta[fallback] if fallback in meta else pd.Series([None] * len(meta))
@@ -85,6 +90,7 @@ def catalog_from_meta(meta: pd.DataFrame, max_tags: int = 20) -> Catalog:
     emb = None
     if "muq_embedding" in meta and meta["muq_embedding"].notna().all():
         emb = np.stack([np.asarray(e, dtype=np.float32) for e in meta["muq_embedding"]])
+        emb /= np.maximum(np.linalg.norm(emb, axis=1, keepdims=True), 1e-8)   # косинус = скалярное произведение
     return Catalog(df, embeddings=emb)
 
 
@@ -93,18 +99,21 @@ def catalog_from_meta(meta: pd.DataFrame, max_tags: int = 20) -> Catalog:
 _USER_COLUMNS = ["user_id", "split", "history", "history_ts", "user_profile", "user_demographics"]
 
 
-def read_split(directory: str, split: str, n_users: Optional[int] = None,
-               seed: int = 42) -> Dict[str, pd.DataFrame]:
-    """{users, queries, qrels} сплита. Пользователи сэмплируются до перевода в pandas (полная история — гигабайты),
-    запросы и ответы читаются только для выбранных пользователей."""
+def read_queries(directory: str, split: str) -> pd.DataFrame:
+    return pq.read_table(split_path(directory, f"{split}_queries")).to_pandas()
+
+
+def read_qrels(directory: str, split: str) -> pd.DataFrame:
+    return pq.read_table(split_path(directory, f"{split}_qrels")).to_pandas()
+
+
+def read_users(directory: str, split: str, user_ids: Optional[Iterable[Any]] = None) -> pd.DataFrame:
+    """Строки пользователей сплита; user_ids — только эти (фильтр до перевода в pandas: история — гигабайты)."""
     users = pq.read_table(split_path(directory, split), columns=_USER_COLUMNS)
-    if n_users is not None and n_users < users.num_rows:
-        users = users.take(np.sort(np.random.default_rng(seed).choice(users.num_rows, size=n_users, replace=False)))
-    queries = pq.read_table(split_path(directory, f"{split}_queries"))
-    queries = queries.filter(pc.is_in(queries["user_id"], value_set=users["user_id"]))
-    qrels = pq.read_table(split_path(directory, f"{split}_qrels"))
-    qrels = qrels.filter(pc.is_in(qrels["query_id"], value_set=queries["query_id"]))
-    return {"users": users.to_pandas(), "queries": queries.to_pandas(), "qrels": qrels.to_pandas()}
+    if user_ids is not None:
+        users = users.filter(pc.is_in(users["user_id"], value_set=pa.array(sorted(set(user_ids)),
+                                                                          type=users.schema.field("user_id").type)))
+    return users.to_pandas()
 
 
 def aggregate_history(history: Sequence[str], history_ts: Optional[Sequence[int]] = None) -> List[HistoryItem]:
@@ -140,44 +149,45 @@ def _missing(x: Any) -> bool:
     return x is None or (isinstance(x, float) and np.isnan(x))
 
 
-def requests_from_tables(tables: Dict[str, pd.DataFrame], max_queries_per_user: Optional[int] = None,
-                         seed: int = 42, catalog: Optional[Catalog] = None) -> List[Request]:
-    """users + queries + qrels -> по Request на query_id. История одного пользователя — общий список.
-    catalog — чтобы подписать цель (артист, название) в meta."""
-    rng = np.random.default_rng(seed)
-    qrels = tables["qrels"].set_index("query_id").to_dict("index")
-    by_user = {u: g for u, g in tables["queries"].groupby("user_id", sort=False)}
+def build_requests(queries: pd.DataFrame, users: pd.DataFrame, qrels: Optional[pd.DataFrame] = None,
+                   catalog: Optional[Catalog] = None, cutoff: Optional[int] = None) -> List[Request]:
+    """По Request на строку queries, в их порядке. История одного пользователя — общий список (не копируется).
+
+    users — строки сплита (user_id, history, history_ts, user_profile, user_demographics) для всех user_id из queries;
+    qrels — ответы (без них target_ids пустые: сабмит); cutoff — начало окна сплита (unix): история строго до него;
+    catalog — подписать цель (артист, название) в meta.
+    """
+    by_user = {row.user_id: row for row in users.itertuples(index=False)}
+    answers = qrels.set_index("query_id").to_dict("index") if qrels is not None and len(qrels) else {}
+    histories: Dict[Any, List[HistoryItem]] = {}
     out: List[Request] = []
-    for row in tables["users"].itertuples(index=False):
-        queries = by_user.get(row.user_id)
-        if queries is None:
-            continue
-        if max_queries_per_user is not None and len(queries) > max_queries_per_user:
-            queries = queries.iloc[np.sort(rng.choice(len(queries), size=max_queries_per_user, replace=False))]
-        history = aggregate_history(row.history, row.history_ts)
-        attrs = parse_demographics(row.user_demographics)
-        for q in queries.itertuples(index=False):
-            ans = qrels[q.query_id]
+    for q in queries.itertuples(index=False):
+        row = by_user.get(q.user_id)
+        if row is None:
+            raise KeyError(f"нет пользователя {q.user_id} для запроса {q.query_id}")
+        if q.user_id not in histories:
+            histories[q.user_id] = aggregate_history(row.history, row.history_ts)
+        meta: Dict[str, Any] = {"split": str(q.split), "query_type": str(q.query_type),
+                                "source": str(getattr(q, "source", "")), "cutoff": cutoff}
+        targets: List[str] = []
+        ans = answers.get(q.query_id)
+        if ans is not None:
             target = str(ans["target_m4a_id"])
+            targets = [target]
             info = (catalog.row(target) if catalog is not None else None) or {}
-            out.append(Request(
-                dialog=[Message("user", str(q.query))],
-                history=history,
-                user_info=str(row.user_profile or ""),
-                user_attrs=attrs,
-                user_id=str(row.user_id),
-                request_id=str(q.query_id),
-                target_ids=[target],
-                meta={
-                    "split": str(q.split),
-                    "query_type": str(q.query_type),
-                    "source": str(q.source),
-                    "is_new": bool(ans["is_new"]),
-                    "ts": int(ans["ts"]),
-                    "exclude_ids": [] if _missing(ans["exclude_m4a_id"]) else [str(ans["exclude_m4a_id"])],
-                    "exclude_artist": None if _missing(ans["exclude_artist"]) else str(ans["exclude_artist"]),
-                    "artist": info.get("artist"),
-                    "title": info.get("title"),
-                },
-            ))
+            meta.update(
+                is_new=bool(ans["is_new"]), ts=int(ans["ts"]),
+                exclude_ids=[] if _missing(ans["exclude_m4a_id"]) else [str(ans["exclude_m4a_id"])],
+                exclude_artist=None if _missing(ans["exclude_artist"]) else str(ans["exclude_artist"]),
+                artist=info.get("artist"), title=info.get("title"))
+        out.append(Request(
+            dialog=[Message("user", str(q.query))],
+            history=histories[q.user_id],
+            user_info=str(row.user_profile or ""),
+            user_attrs=parse_demographics(row.user_demographics),
+            user_id=str(q.user_id),
+            request_id=str(q.query_id),
+            target_ids=targets,
+            meta=meta,
+        ))
     return out

@@ -1,15 +1,17 @@
-"""Векторы обученного двухбашенного кандгена в файлы: треки и запросы сплитов (GPU; дальше — без GPU).
+"""Векторы обученного двухбашенного кандгена в файлы: треки и запросы частей датасета (GPU; дальше — без GPU).
 
-    python scripts/encode_twotower.py --run-dir artifacts/twotower/main                      # сплиты из конфига
-    python scripts/encode_twotower.py --run-dir artifacts/twotower/main --splits test_public --history-len 16
+    python scripts/encode_twotower.py --run-dir artifacts/twotower/main                      # части из конфига
+    python scripts/encode_twotower.py --run-dir artifacts/twotower/main --parts submit       # весь test_public
+    python scripts/encode_twotower.py --run-dir artifacts/twotower/main --parts test --history-len 16
 
 В --run-dir (или --out):
   item_vectors.npy, item_ids.npy           (n_tracks, dim) float32 и m4a_id по строкам
-  query_vectors_<сплит>.npz                query_id, vectors (float16); с --history-len — ..._h<L>.npz
-  recall_<сплит>.json                      recall@10/100/200 по всему каталогу, всего и по типам запросов
+  query_vectors_<часть>.npz                query_id, vectors (float16); с --history-len — ..._h<L>.npz
+  recall_<часть>.json                      recall@10/100/200 по всему каталогу, всего и по типам запросов
 
-Источник retrieval.twotower (recsys/retrieval/twotower.py) читает эти файлы: метрики в общем пайплайне —
-python scripts/evaluate_candgen.py --set retrieval.twotower.enabled=true --set retrieval.twotower.dir=<папка>.
+Части — recsys/data/parts.py: модель учится на index, векторы нужны для ranker_train, valid, test (и submit).
+Кандген twotower (recsys/candgen/dense.py) читает эти файлы: метрики в общем пайплайне —
+python -m recsys candgen --sources +twotower --set candgen.sources.twotower.dir=<папка>.
 """
 import argparse
 import json
@@ -30,7 +32,7 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--run-dir", required=True, help="папка прогона scripts/train_twotower.py")
     p.add_argument("--checkpoint", default="model.pt", help="model.pt (лучшее на валидации) или last.pt")
-    p.add_argument("--splits", help="через запятую (по умолчанию twotower.encode.splits)")
+    p.add_argument("--parts", help="части запросов через запятую (по умолчанию twotower.encode.parts)")
     p.add_argument("--n-users", type=int, help="столько пользователей сплита (быстрая проверка)")
     p.add_argument("--history-len", type=int, help="обрезать историю до L треков (ablation, без переобучения)")
     p.add_argument("--out", help="куда писать (по умолчанию --run-dir)")
@@ -55,7 +57,7 @@ def main(argv=None) -> int:
     print(f"[encode] треки: {v.shape} -> {out / 'item_vectors.npy'}")
 
     suffix = f"_h{a.history_len}" if a.history_len is not None else ""
-    for split in (a.splits.split(",") if a.splits else tcfg.get("encode", {}).get("splits", ["test_public"])):
+    for split in (a.parts.split(",") if a.parts else tcfg.get("encode", {}).get("parts", ["ranker_train", "valid", "test"])):
         print(f"[encode] {split}: читаю запросы...")
         ex = load_examples(cfg, split, builder.spec, codes.sid, n_users=a.n_users)
         u = encode_examples(model, ex, builder, device, precision, bs, history_len=a.history_len, log=print)

@@ -94,7 +94,7 @@ class Examples:
 
 def build_examples(tables: Dict[str, pd.DataFrame], pos: Dict[str, int], spec: TokenizerSpec,
                    history_len: int = 64, max_query_tokens: int = 96) -> Examples:
-    """tables — read_split (users, queries, qrels); pos — m4a_id -> номер трека (SemanticIDs._pos)."""
+    """tables — users, queries, qrels части (build.load_examples); pos — m4a_id -> номер трека (SemanticIDs._pos)."""
     users = tables["users"]
     uidx = {u: i for i, u in enumerate(users["user_id"])}
     histories = [recent_unique(list(h), pos, history_len) for h in users["history"]]

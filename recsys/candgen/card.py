@@ -1,8 +1,8 @@
-"""Локальный BM25 по карточке трека: источник bm25 (топ по каталогу) и совпадение с запросом в relisten
-(те же скоры, но только по трекам истории). BM25 на scipy.sparse, без сервисов.
+"""Карточка трека: свой BM25 на scipy.sparse по полям с весами. Кандгены card_bm25 (топ по каталогу) и relisten
+(те же скоры, но только по трекам истории). Ищут по разбору запроса (DialogSummary), а не по сырому тексту.
 
 Карточка — несколько полей, у каждого свой BM25-индекс; скор трека = сумма скоров полей с весами
-(bm25_index.weights, задаются при запросе — индекс пересобирать не нужно). Поля отдельно, а не одним текстом:
+(candgen.card_index.weights, задаются при запросе — индекс пересобирать не нужно). Поля отдельно, а не одним текстом:
 иначе длинные тексты песен и описания из-за нормировки на длину «размывают» совпадения по тегам.
 
   meta     теги Last.fm (повтор по весу), жанры, артист, название, альбом, год / десятилетие, страна, язык, инструментал;
@@ -14,7 +14,7 @@
   artist   жанры артиста
   about    описание альбома и статья Википедии об артисте
 
-Сборка на полном каталоге — около минуты, поэтому индекс кэшируется в data.cache_dir (python scripts/make_index.py).
+Сборка на полном каталоге — около минуты; индекс кэшируется в data.cache_dir/indexes/ (python -m recsys build-index).
 """
 from __future__ import annotations
 
@@ -28,7 +28,9 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
+from recsys.candgen.base import Candgen, Cands, ranked, register, top_positions
 from recsys.data.catalog import Catalog
+from recsys.schemas import Context, DialogSummary
 from recsys.text import STOPWORDS, decade_tag, tokenize
 
 
@@ -240,39 +242,100 @@ def build_card_index(catalog: Catalog, meta: Optional[pd.DataFrame] = None, k1: 
     return CardIndex(fields)
 
 
-def card_index_path(cfg: Dict[str, Any], catalog: Catalog) -> Optional[str]:
-    """Файл кэша: зависит от tracks_meta (размер, время), каталога, рецепта и k1 / b; None — без кэша."""
-    dcfg, icfg = cfg["data"], cfg.get("bm25_index", {})
-    if dcfg.get("source") != "crs" or not dcfg.get("cache_dir") or not dcfg.get("use_cache", True):
-        return None
-    from recsys.data.crs import split_path
-    st = os.stat(split_path(dcfg["crs"]["dir"], "tracks_meta"))
-    key = (f"{CARD_VERSION}_{st.st_size}_{int(st.st_mtime)}_{len(catalog)}_{dcfg.get('max_tags', 20)}_"
-           f"{icfg.get('k1', 1.2)}_{icfg.get('b', 0.75)}")
-    return os.path.join(dcfg["cache_dir"], f"bm25_cards_{hashlib.md5(key.encode()).hexdigest()[:10]}.npz")
-
-
-def load_card_index(cfg: Dict[str, Any], catalog: Catalog, verbose: bool = True) -> CardIndex:
-    """Из кэша, если есть; иначе собирает (на Music4All-CRS — с текстовыми полями tracks_meta) и кладёт в кэш."""
-    path = card_index_path(cfg, catalog)
+def load_card_index(res, k1: float = 1.2, b: float = 0.75, log=print) -> CardIndex:
+    """Из кэша data.cache_dir/indexes/ или собрать (текстовые поля — из tracks_meta) и сохранить.
+    Ключ — версия данных, рецепт карточки (CARD_VERSION), k1 и b; веса полей задаются при запросе."""
+    key = hashlib.md5(f"{CARD_VERSION}_{res.dataset.source_key}_{k1}_{b}".encode()).hexdigest()[:10]
+    cache_dir = res.cfg["data"].get("cache_dir")
+    path = os.path.join(cache_dir, "indexes", f"card_{key}.npz") if cache_dir else None
     if path and os.path.exists(path):
         return CardIndex.load(path)
-    icfg = cfg.get("bm25_index", {})
     t0 = time.time()
-    meta = None
-    if cfg["data"].get("source") == "crs":
-        import pyarrow.parquet as pq
-        from recsys.data.crs import split_path
-        src = split_path(cfg["data"]["crs"]["dir"], "tracks_meta")
-        present = set(pq.read_schema(src).names)
-        cols = ["m4a_id"] + [c for cs in CARD_FIELDS.values() for c in cs if c in present]
-        meta = pq.read_table(src, columns=cols).to_pandas()
-    index = build_card_index(catalog, meta, k1=icfg.get("k1", 1.2), b=icfg.get("b", 0.75))
+    meta = res.dataset.tracks_meta(["m4a_id"] + [c for cs in CARD_FIELDS.values() for c in cs])
+    index = build_card_index(res.catalog, meta, k1=k1, b=b)
     if path:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         index.save(path)
-    if verbose:
-        sizes = ", ".join(f"{n}: {len(i.vocab)}" for n, i in index.fields.items())
-        print(f"[bm25] индекс карточек собран за {time.time() - t0:.0f} c (словарь — {sizes})"
-              + (f" -> {path}" if path else ""))
+    log(f"индекс карточек: собран за {time.time() - t0:.0f} c")
     return index
+
+
+# ---------------------------------------------------------------- кандгены
+
+def query_terms(s: DialogSummary) -> Dict[str, float]:
+    """Разбор запроса -> взвешенные токены карточки: тег целиком ×2 и его слова, артисты ×3, слова query,
+    страна / язык / год; слова исключённых тегов убираем, если они не входят в желаемые ('рок, но не хард-рок')."""
+    q: Counter = Counter()
+    for tag in s.include_tags:
+        q[tag_token(tag)] += 2.0
+        for w in index_words(tag):
+            q[w] += 1.0
+    for a in s.seed_artists:
+        q[artist_token(a)] += 3.0
+    for w in index_words(s.query):
+        q[w] += 1.0
+    for c in s.countries:
+        q[country_token(c)] += 2.0
+    for lang in s.languages:
+        q[lang_token(lang)] += 2.0
+    for y in s.years:
+        q[year_token(y)] += 2.0
+    wanted = {w for t in s.include_tags for w in index_words(t)}
+    for w in {w for t in s.exclude_tags for w in index_words(t)} - wanted:
+        q.pop(w, None)
+    return dict(q)
+
+
+class _CardCandgen(Candgen):
+    """Общий индекс карточек (candgen.card_index: k1, b, weights) для card_bm25 и relisten."""
+
+    @property
+    def index(self) -> CardIndex:
+        return self.res.card_index
+
+    @property
+    def weights(self) -> Optional[Dict[str, float]]:
+        return self.res.cfg["candgen"].get("card_index", {}).get("weights")
+
+    def cache_key(self) -> Dict[str, Any]:
+        return {**super().cache_key(), "card_index": self.res.cfg["candgen"].get("card_index", {}),
+                "card_version": CARD_VERSION, "summarizer": self.res.cfg.get("summarizer", {}).get("type")}
+
+
+@register("card_bm25", "text")
+class CardBM25(_CardCandgen):
+    """BM25 по карточке трека (поля с весами) по разбору запроса: теги, артисты, слова, страна, язык, год."""
+
+    def retrieve(self, batch: List[Context]) -> List[Cands]:
+        out = []
+        for ctx in batch:
+            q = query_terms(ctx.summary)
+            out.append(top_positions(self.index.scores(q, self.weights), self.top_k) if q else Cands.empty())
+        return out
+
+
+@register("relisten", "history")
+class Relisten(_CardCandgen):
+    """Свои треки пользователя: совпадение карточки с запросом (0..1, к лучшему треку истории)
+    + history_weight * вес в истории (log1p(count) * recency_decay^(место по свежести), 0..1)."""
+
+    def retrieve(self, batch: List[Context]) -> List[Cands]:
+        hw = float(self.cfg.get("history_weight", 0.3))
+        decay = float(self.cfg.get("recency_decay", 0.995))
+        out = []
+        for ctx in batch:
+            items = [(self.res.catalog.pos(h.track_id), h) for h in ctx.request.history]   # свежие первыми
+            items = [(p, h) for p, h in items if p is not None]
+            if not items:
+                out.append(Cands.empty())
+                continue
+            pos = np.array([p for p, _ in items], dtype=np.int32)
+            hist = np.array([np.log1p(h.count) * decay ** i for i, (_, h) in enumerate(items)])
+            score = hw * hist / hist.max()
+            q = query_terms(ctx.summary)
+            if q:
+                match = self.index.scores(q, self.weights)[pos]
+                if match.max() > 0:
+                    score = score + match / match.max()
+            out.append(ranked(pos, score.astype(np.float32), self.top_k))
+        return out

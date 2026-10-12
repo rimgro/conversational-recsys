@@ -75,7 +75,12 @@ class GemmaQueryEmbedder:
         return _MODELS[self.key]
 
     def encode(self, query: str) -> List[float]:
-        vec = self._model().encode([query_text(query)], normalize_embeddings=False, convert_to_numpy=True)[0]
+        return self.encode_batch([query])[0].tolist()
+
+    def encode_batch(self, queries: List[str], batch_size: int = 64) -> np.ndarray:
+        """(len(queries), 768) float32, L2-нормированы."""
+        vec = self._model().encode([query_text(q) for q in queries], batch_size=batch_size,
+                                   normalize_embeddings=False, convert_to_numpy=True, show_progress_bar=False)
         vec = np.nan_to_num(np.asarray(vec, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
-        norm = float(np.linalg.norm(vec))
-        return (vec / norm if norm > 0 else vec).tolist()
+        norm = np.linalg.norm(vec, axis=1, keepdims=True)
+        return vec / np.where(norm > 0, norm, 1.0)

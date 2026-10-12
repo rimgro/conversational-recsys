@@ -1,51 +1,22 @@
-"""Наша часть <-> сервис HNSW по HTTP: клиент recsys/retrieval/remote.py против поддельного сервиса
-по контракту docs/candgen_api.md (сам сервис — релиз hnsw-v1). BM25 локальный, сервиса у него нет."""
+"""Клиент сервиса HNSW (recsys/candgen/remote.py) против поддельного сервиса по контракту docs/candgen_api.md
+и кандген hnsw с вектором запроса, построенным у нас (recsys/candgen/query_embedder.py)."""
 import json
 import os
-import socket
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import numpy as np
 import pytest
 
-from recsys.config import deep_update, load_config
-from recsys.pipeline import Pipeline
+from recsys.candgen import REGISTRY
+from recsys.candgen.remote import CandgenClient, CandgenError, expand_env
 from recsys.schemas import Message, Request
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT = os.path.join(ROOT, "configs", "default.yaml")
-
-
-def _api_cfg(cfg, url, **extra):
-    base = load_config(DEFAULT, {"data": cfg["data"]})  # в default.yaml HNSW включён
-    return deep_update(base, {"candgen": {"hnsw": {"url": url}, **extra}})
-
-
-def _free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-class _FakeEmbedder:
-    """Вместо EmbeddingGemma: единичный вектор из 768 чисел; fail — модель не загрузилась."""
-
-    def __init__(self, fail=False):
-        self.fail, self.texts = fail, []
-
-    def encode(self, text):
-        if self.fail:
-            raise ImportError("No module named 'sentence_transformers'")
-        self.texts.append(text)
-        return [0.0] * 767 + [1.0]
 
 
 @pytest.fixture
-def fake_hnsw(data):
-    """Поддельный HNSW по контракту: запоминает запросы, отвечает треками каталога.
-    Первое соединение к /hnsw/search обрывается без ответа — клиент должен повторить."""
+def fake_hnsw():
+    """Поддельный HNSW: запоминает запросы. Первое соединение к /hnsw/search обрывается — клиент должен повторить."""
     calls, dropped = [], []
-    ids = [str(t) for t in data.catalog.track_ids[:50]]
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -58,15 +29,15 @@ def fake_hnsw(data):
                 self.close_connection = True
                 return
             calls.append((self.path, body, dict(self.headers)))
-            out = [t for t in ids if t not in set(body["exclude_ids"])][:body["k"]]
-            self._send({"ids": out, "scores": [1.0 / (i + 1) for i in range(len(out))]})
+            self._send({"ids": ["a", "b"], "scores": [0.9, 0.5], "items": []})
 
-        def _send(self, resp):
-            raw = json.dumps(resp).encode()
+        def _send(self, obj):
+            out = json.dumps(obj).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
             self.end_headers()
-            self.wfile.write(raw)
+            self.wfile.write(out)
 
         def log_message(self, *args):
             pass
@@ -77,55 +48,23 @@ def fake_hnsw(data):
     server.shutdown()
 
 
-def test_pipeline_calls_hnsw(cfg, data, fake_hnsw, monkeypatch):
+def test_client_retries_and_sends_key(fake_hnsw):
     url, calls = fake_hnsw
-    monkeypatch.setenv("HNSW_API_KEY", "h456")
-    pipe = Pipeline.from_config(_api_cfg(cfg, url), data.catalog)
-    assert {r.name for r in pipe.retrievers} == {"bm25", "hnsw", "audio", "relisten"}
-    hnsw = next(r for r in pipe.retrievers if r.name == "hnsw")
-    hnsw.embedder = _FakeEmbedder()  # настоящую модель в тестах не грузим
-    req = Request(dialog=[Message("user", "calm jazz, but not heavy metal")], history=data.requests[0].history,
-                  shown_ids=[str(data.catalog.track_ids[0])])
-    resp = pipe.run(req, debug=True)
-
-    (path, body, headers), = calls  # один запрос: первый обрыв клиент повторил
-    assert path == "/hnsw/search" and len(body["vector"]) == 768 and set(body) == {"vector", "k", "exclude_ids"}
-    assert hnsw.embedder.texts == ["calm jazz, but not heavy metal"]
-    assert body["exclude_ids"] == [str(data.catalog.track_ids[0])] and headers.get("X-Api-Key") == "h456"
-    assert len(resp.debug["candidates"]["hnsw"]) == 49 and resp.tracks and hnsw.last_error is None
-    assert hnsw.health() == {"url": url, "status": "ok", "index_version": "test/1", "n_items": 50}
-
-
-def test_hnsw_down_does_not_break_pipeline(cfg, data):
-    port = _free_port()  # на нём никто не слушает
-    pipe = Pipeline.from_config(_api_cfg(cfg, f"http://127.0.0.1:{port}", timeout=0.5), data.catalog)
-    hnsw = next(r for r in pipe.retrievers if r.name == "hnsw")
-    hnsw.embedder = _FakeEmbedder()
-    with pytest.warns(UserWarning, match="кандген недоступен"):
-        resp = pipe.run(data.requests[0], debug=True)
-    assert resp.tracks  # локальные relisten, audio и bm25 работают
-    assert hnsw.last_error and hnsw.n_errors == 1 and hnsw.health()["status"] == "unavailable"
+    client = CandgenClient(url, api_key="secret", timeout=5)
+    assert client.get("/health")["status"] == "ok"
+    resp = client.post("/hnsw/search", {"vector": [0.0] * 768, "k": 2})
+    assert resp["ids"] == ["a", "b"] and {k.lower(): v for k, v in calls[0][2].items()}["x-api-key"] == "secret"
+    with pytest.raises(CandgenError):
+        CandgenClient("http://127.0.0.1:9", timeout=0.5, retries=0).get("/health")
 
 
 def test_expand_env(monkeypatch):
-    from recsys.retrieval.remote import CandgenClient, expand_env
     monkeypatch.delenv("HNSW_URL", raising=False)
     assert expand_env("${HNSW_URL:-http://localhost:8001}") == "http://localhost:8001"
     monkeypatch.setenv("HNSW_URL", "http://10.0.0.7:8001/")
     assert expand_env("${HNSW_URL:-http://localhost:8001}") == "http://10.0.0.7:8001/"
     c = CandgenClient("${HNSW_URL}", api_key="${NO_SUCH_VAR}")
     assert c.url == "http://10.0.0.7:8001" and "X-API-Key" not in c.headers
-
-
-def test_client_config(monkeypatch):
-    from recsys.retrieval.remote import CandgenClient
-    monkeypatch.setenv("HNSW_URL", "http://1.2.3.4:8000")
-    cfg = load_config(DEFAULT)
-    client = CandgenClient.from_config(cfg, "hnsw", {"timeout": 9})
-    assert (client.url, client.timeout, client.retries) == ("http://1.2.3.4:8000", 9, 1)
-    monkeypatch.delenv("HNSW_URL")
-    with pytest.raises(ValueError, match="candgen.hnsw.url"):
-        CandgenClient.from_config(cfg, "hnsw")
 
 
 def test_load_env(tmp_path, monkeypatch):
@@ -139,35 +78,29 @@ def test_load_env(tmp_path, monkeypatch):
     monkeypatch.delenv("RECSYS_T1")
 
 
-def test_hnsw_sends_vector_built_locally(cfg, data, fake_hnsw):
-    """В HNSW уходит вектор (по рецепту сервиса), а не текст; модель не загрузилась — источник пропускается."""
-    from recsys.retrieval.query_embedder import query_text
-    url, calls = fake_hnsw
-
-    pipe = Pipeline.from_config(_api_cfg(cfg, url), data.catalog)
-    hnsw = next(r for r in pipe.retrievers if r.name == "hnsw")
-    hnsw.embedder = _FakeEmbedder()
-    req = Request(dialog=[Message("user", "calm  jazz\nfor   night")], history=data.requests[0].history)
-    pipe.run(req)
-    body = next(b for p, b, h in calls if p == "/hnsw/search")
-    assert len(body["vector"]) == 768 and "query" not in body and hnsw.embedder.texts == ["calm  jazz\nfor   night"]
+def test_query_text_recipe():
+    from recsys.candgen.query_embedder import query_text
     assert query_text("calm  jazz\nfor   night") == "task: search result | query: calm jazz for night"
 
-    calls.clear()
-    hnsw.embedder = _FakeEmbedder(fail=True)
-    with pytest.warns(UserWarning, match="вектор запроса не построен"):
-        resp = pipe.run(req, debug=True)
-    assert not [b for p, b, h in calls if p == "/hnsw/search"] and hnsw.embed_error
-    assert resp.debug["n_candidates"]["hnsw"] == 0 and resp.tracks
+
+class _FakeEmbedder:
+    """Вместо EmbeddingGemma: вектор трека 4 для любого текста."""
+
+    def __init__(self, vector):
+        self.vector, self.texts = vector, []
+
+    def encode(self, text):
+        self.texts.append(text)
+        return self.vector.tolist()
 
 
-def test_hnsw_health_checks_embedder(cfg, data, fake_hnsw):
-    """Сервис отвечает, но модель для вектора не загрузилась: /health не «ok», иначе прогон молча идёт без HNSW."""
-    url, _ = fake_hnsw
-    pipe = Pipeline.from_config(_api_cfg(cfg, url), data.catalog)
-    hnsw = next(r for r in pipe.retrievers if r.name == "hnsw")
-    hnsw.embedder = _FakeEmbedder(fail=True)
-    h = hnsw.health()
-    assert h["status"] == "no_embedder" and "sentence_transformers" in h["error"]
-    pipe.run(data.requests[0])
-    assert hnsw.n_errors == 1  # запрос без кандидатов HNSW попадает в candgen_errors
+def test_hnsw_online_encodes_new_reply(res, catalog, tmp_path):
+    """Реплики нет в файлах векторов: online: true кодирует её моделью (здесь — подделка), поиск локальный."""
+    v = np.random.default_rng(0).normal(size=(len(catalog), 16)).astype(np.float32)
+    np.save(tmp_path / "item_vectors.npy", v)
+    np.save(tmp_path / "item_ids.npy", catalog.track_ids.astype(str))
+    hnsw = REGISTRY["hnsw"]({"top_k": 10, "dir": str(tmp_path), "online": True}, res)
+    hnsw._encoder = _FakeEmbedder(v[4])
+    ctx = res.context(Request(dialog=[Message("user", "calm jazz"), Message("user", "now faster")]))
+    got = hnsw.retrieve([ctx])[0]
+    assert got.ids[0] == 4 and hnsw._encoder.texts == ["now faster"]   # последняя реплика

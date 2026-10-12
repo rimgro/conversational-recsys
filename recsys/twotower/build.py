@@ -10,7 +10,9 @@ from typing import Any, Dict, Optional
 import numpy as np
 import torch
 
-from recsys.data.crs import read_split, split_path
+from recsys.data.crs import split_path
+from recsys.data.dataset import Dataset
+from recsys.data.parts import part_split
 from recsys.semantic_ids import SemanticIDs, load_semantic_ids, random_codes, song_groups
 from recsys.twotower.data import Examples, SequenceBuilder, TokenizerSpec, build_examples, recent_unique
 from recsys.twotower.model import TwoTower, build_model, load_base
@@ -37,13 +39,25 @@ def load_codes(cfg: Dict[str, Any]) -> Codes:
 
 
 def tracks_meta_path(cfg: Dict[str, Any]) -> str:
-    return split_path(cfg["data"]["crs"]["dir"], "tracks_meta")
+    return split_path(cfg["data"]["dir"], "tracks_meta")
 
 
-def load_examples(cfg: Dict[str, Any], split: str, spec: TokenizerSpec, sid: SemanticIDs,
+def load_examples(cfg: Dict[str, Any], part: str, spec: TokenizerSpec, sid: SemanticIDs,
                   n_users: Optional[int] = None) -> Examples:
+    """Запросы части датасета (recsys/data/parts.py): обучение — только index, чтобы на ranker_train / valid / test
+    модель не видела своих обучающих запросов (иначе ранкер научится ей доверять больше, чем она того стоит).
+    n_users — столько случайных пользователей части (быстрая проверка)."""
     icfg = cfg.get("twotower", {}).get("input", {})
-    tables = read_split(cfg["data"]["crs"]["dir"], split, n_users=n_users, seed=cfg["data"]["crs"].get("seed", 42))
+    ds = Dataset(cfg, verbose=False)
+    split = part_split(part, cfg["data"]["parts"])
+    queries = ds.part(part)
+    if n_users is not None:
+        users = queries["user_id"].drop_duplicates()
+        users = users.sample(n=min(n_users, len(users)), random_state=cfg["data"]["parts"].get("seed", 42))
+        queries = queries[queries["user_id"].isin(set(users))]
+    qrels = ds.table(split, "qrels")
+    tables = {"users": ds.users(split, queries["user_id"].unique()), "queries": queries,
+              "qrels": qrels[qrels["query_id"].isin(set(queries["query_id"]))]}
     return build_examples(tables, sid._pos, spec, icfg.get("history_len", 64), icfg.get("max_query_tokens", 96))
 
 

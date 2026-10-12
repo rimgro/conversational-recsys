@@ -1,5 +1,5 @@
-"""Двухбашенный кандген (recsys/twotower/, recsys/retrieval/twotower.py) на крошечной случайной Qwen3:
-данные, лосс и маска дублей, этапы обучения с LoRA, сохранение и загрузка, источник по готовым векторам."""
+"""Двухбашенный кандген (recsys/twotower/) на крошечной случайной Qwen3: данные, лосс и маска дублей, этапы обучения
+с LoRA, сохранение и загрузка. Кандген по готовым векторам — tests/test_retrieval.py::test_dense_reads_vectors."""
 import json
 
 import numpy as np
@@ -10,7 +10,7 @@ torch = pytest.importorskip("torch")
 transformers = pytest.importorskip("transformers")
 pytest.importorskip("peft")
 
-from recsys.twotower.data import (Examples, QueryDataset, SequenceBuilder, TokenizerSpec,  # noqa: E402
+from recsys.twotower.data import (QueryDataset, SequenceBuilder, TokenizerSpec,  # noqa: E402
                                   build_examples, is_val_user, recent_unique)
 from recsys.twotower.model import build_model, trainable_state  # noqa: E402
 from recsys.twotower.train import encode_examples, load_weights, recall_at, train  # noqa: E402
@@ -144,28 +144,6 @@ def test_train_stages_save_and_load(tmp_path):
     assert np.allclose(u1, u2, atol=1e-5)
     r = recall_at(u1, fresh.encode_items().detach().numpy(), val.target)
     assert set(r) >= {"recall@10", "recall@100", "recall@200", "ranks"}
-
-
-def test_retriever_reads_vectors(tmp_path, data):
-    from recsys.data.load import load_data  # noqa: F401  (data — общая синтетика из conftest)
-    from recsys.retrieval.twotower import TwoTowerRetriever
-    from recsys.schemas import Context, DialogSummary, Message, Request, UserProfile
-    cat = data.catalog
-    ids = np.array([str(t) for t in cat.track_ids[:30]])
-    rng = np.random.default_rng(0)
-    v = rng.normal(size=(30, 8)).astype(np.float32)
-    v /= np.linalg.norm(v, axis=1, keepdims=True)
-    np.save(tmp_path / "item_vectors.npy", v)
-    np.save(tmp_path / "item_ids.npy", ids)
-    np.savez(tmp_path / "query_vectors_test_public.npz", query_id=np.array(["q1"]), vectors=v[[4]].astype(np.float16))
-    r = TwoTowerRetriever(cat, str(tmp_path), top_k=5)
-    ctx = Context(Request(dialog=[Message("user", "x")], request_id="q1", shown_ids=[ids[7]]), DialogSummary(),
-                  UserProfile(), banned_ids={ids[7]})
-    got = [c.track_id for c in r.search(ctx)]
-    assert got[0] == ids[4] and ids[7] not in got and len(got) == 5 and set(got) <= set(ids)
-    with pytest.warns(UserWarning, match="нет вектора запроса"):
-        assert r.search(Context(Request(request_id="нет"), DialogSummary(), UserProfile())) == []
-    assert r.n_missing == 1
 
 
 def test_device_attention_and_nan_guard():

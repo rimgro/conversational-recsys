@@ -1,6 +1,7 @@
-"""Контракты между шагами пайплайна.
+"""Контракты пайплайна (recsys/pipeline.py).
 
-Request -> DialogSummary -> {source: [Candidate]} -> [FusedCandidate] -> features -> [RankedTrack] -> Response
+Request -> Context (DialogSummary, UserProfile, состояние пользователя) -> кандгены (candgen.Cands) -> отбор
+(selection.Selection) -> признаки и ранкер -> [RankedTrack] -> Response
 """
 from __future__ import annotations
 
@@ -39,7 +40,8 @@ class Request:
     liked_ids: List[str] = field(default_factory=list)
     skipped_ids: List[str] = field(default_factory=list)
     target_ids: List[str] = field(default_factory=list)   # только для офлайн-оценки
-    meta: Dict[str, Any] = field(default_factory=dict)    # query_type, is_new, exclude_*, split, ...
+    meta: Dict[str, Any] = field(default_factory=dict)    # только для метрик и разбора: query_type, is_new,
+                                                          # exclude_*, цель; модель их не читает (кроме cutoff)
 
     @property
     def user_messages(self) -> List[str]:
@@ -114,33 +116,15 @@ class Context:
     summary: DialogSummary
     profile: UserProfile
     banned_ids: Set[str] = field(default_factory=set)  # не рекомендовать: показанное, скипнутое, прослушанное
+    user: Any = None                                   # recsys.data.users.UserState: история на момент запроса
 
     @classmethod
     def build(cls, request: Request, summary: DialogSummary, profile: UserProfile,
-              exclude_listened: bool = True) -> "Context":
+              exclude_listened: bool = False, user: Any = None) -> "Context":
         banned = set(request.shown_ids) | set(request.skipped_ids)
         if exclude_listened or summary.new_tracks:  # similar_to / novelty: цель — новый для пользователя трек
             banned |= profile.listened_ids
-        return cls(request, summary, profile, banned)
-
-
-# ---------------------------------------------------------------- шаги 2–3: кандидаты и слияние
-
-@dataclass
-class Candidate:
-    track_id: str
-    source: str
-    score: float
-    rank: int  # с 1
-
-
-@dataclass
-class FusedCandidate:
-    track_id: str
-    score: float                                       # RRF
-    ranks: Dict[str, int] = field(default_factory=dict)
-    scores: Dict[str, float] = field(default_factory=dict)
-    violations: int = 0                                # сколько ограничений запроса нарушает (fusion.constraints)
+        return cls(request, summary, profile, banned, user)
 
 
 # ---------------------------------------------------------------- шаги 4–5: выдача

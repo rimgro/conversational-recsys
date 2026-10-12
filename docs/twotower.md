@@ -37,8 +37,12 @@ Qwen3-Embedding-0.6B (веса заморожены; на этапе B — LoRA 
 (`history_dropout`) история обрезается до случайной длины 0..64. Поэтому модель работает при любой длине истории,
 и ablation по длине считается на одной модели (`encode_twotower.py --history-len`).
 
-**Валидация**: 5% пользователей train целиком. Метрика — recall@10 / 100 / 200 по всему каталогу; лучшая модель
-выбирается по recall@100.
+**Данные**: только часть `index` запросов train (`twotower.train.part`, [recsys/data/parts.py](../recsys/data/parts.py)).
+На частях `ranker_train` и `valid` учится и проверяется ранкер: если бы two-tower видел эти запросы, на них он находил
+бы цель «по памяти», ранкер научился бы ему доверять, а на тесте этой памяти нет.
+
+**Валидация**: 5% пользователей части `index` целиком. Метрика — recall@10 / 100 / 200 по всему каталогу; лучшая
+модель выбирается по recall@100.
 
 ## Запуск
 
@@ -58,18 +62,20 @@ python scripts/train_twotower.py --run-dir artifacts/twotower/smoke --n-users 30
 # основная модель -> artifacts/twotower/main: model.pt, last.pt, log.jsonl, metrics.json
 python scripts/train_twotower.py --run-dir artifacts/twotower/main
 
-# векторы треков и запросов test_public (+ recall по всему каталогу, по типам) -> в ту же папку
+# векторы треков и запросов частей ranker_train, valid, test (+ recall по всему каталогу, по типам) -> в ту же папку
 python scripts/encode_twotower.py --run-dir artifacts/twotower/main
+python scripts/encode_twotower.py --run-dir artifacts/twotower/main --parts submit   # для сабмита: весь test_public
 
-# в общей таблице кандгенов (без GPU: читает векторы из папки)
-python scripts/evaluate_candgen.py --n-users 1000 --offline \
-    --set retrieval.twotower.enabled=true --set retrieval.twotower.dir=artifacts/twotower/main
+# в отчёте кандгенов вместе с остальными (без GPU: читает векторы из папки)
+python -m recsys candgen --sources +twotower --set candgen.sources.twotower.dir=artifacts/twotower/main --run tt
+# в отборе: подобрать веса отбора с ним, затем обучить ранкер и оценить
+python -m recsys tune-policy --sources +twotower --run tt
+python -m recsys run --sources +twotower --config runs/tt/selection.yaml --run tt
 ```
 
-У `evaluate_candgen.py` должны совпадать `--n-users` и seed с теми, для которых считались векторы. Проще всего
-кодировать весь сплит, это вариант по умолчанию.
+Векторы запросов привязаны к частям датасета (`data.parts`): после изменения частей их нужно пересчитать.
 
-В `inference.ipynb` (демо) — `retrieval.twotower.online: true`: запросы, которых нет в файлах, кодирует модель
+В `inference.ipynb` (демо) — `candgen.sources.twotower.online: true`: запросы, которых нет в файлах, кодирует модель
 (нужны torch и веса; на GPU быстро).
 
 ## Ablation
@@ -92,5 +98,5 @@ python scripts/evaluate_candgen.py --n-users 1000 --offline \
 | `log.jsonl` | loss, τ, lr по шагам; метрики валидации |
 | `metrics.json` | лучшая валидация и вся валидация после последнего шага, по типам запросов |
 | `item_vectors.npy`, `item_ids.npy` | векторы треков и `m4a_id` |
-| `query_vectors_<сплит>.npz` | `query_id`, векторы запросов (float16) |
-| `recall_<сплит>.json` | recall@k по всему каталогу на сплите, по типам |
+| `query_vectors_<часть>.npz` | `query_id`, векторы запросов (float16) |
+| `recall_<часть>.json` | recall@k по всему каталогу на части, по типам |

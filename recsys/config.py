@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import os
+import subprocess
 import warnings
 from typing import Any, Dict, List, Optional, Union
 
@@ -52,3 +53,28 @@ def load_config(path: Union[str, List[str]] = "configs/default.yaml",
             layer = yaml.safe_load(f) or {}
         cfg = layer if i == 0 else deep_update(cfg, layer)
     return deep_update(cfg, overrides)
+
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def config_path(name: str) -> str:
+    """configs/<name> в текущей папке (так в DataSphere Jobs) или в корне репозитория."""
+    local = os.path.join("configs", name)
+    return local if os.path.exists(local) else os.path.join(ROOT, "configs", name)
+
+
+def set_key(cfg: Dict[str, Any], dotted: str, value: Any) -> None:
+    """set_key(cfg, 'ranker.catboost.depth', 8): вложенные разделы создаются."""
+    *path, last = dotted.split(".")
+    for key in path:
+        cfg = cfg.setdefault(key, {})
+    cfg[last] = value
+
+
+def git_commit() -> str:
+    try:
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True,
+                              text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""

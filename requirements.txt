@@ -4,12 +4,19 @@ scipy>=1.9
 pyarrow>=10
 pyyaml>=6
 pytest>=7
+# кандгены и ранкер (версии — как в бейзлайне team1, reference/team1/requirements.txt)
+bm25s==0.3.13
+scikit-learn==1.6.1
+joblib>=1.3
+catboost==1.2.10
 # для llm.type: local (на GPU-конфигурации DataSphere обычно уже стоит torch)
 # transformers>=4.44
 # accelerate>=0.33
 # bitsandbytes   # только если load_in_4bit: true
-# вектор запроса для HNSW (сервис принимает только вектор): на GPU DataSphere; модель закрытая — нужен HF_TOKEN
+# векторы запросов для кандгена hnsw (scripts/encode_hnsw.py; модель закрытая — нужен HF_TOKEN), lancedb — один раз
+# выгрузить векторы треков из индекса hnsw-v1
 # sentence-transformers>=6.1   # как в релизе hnsw-v1
+# lancedb
 # двухбашенный кандген (scripts/train_twotower.py, encode_twotower.py, docs/twotower.md): обучение — на GPU
 # torch>=2.1
 # transformers>=4.51   # Qwen3

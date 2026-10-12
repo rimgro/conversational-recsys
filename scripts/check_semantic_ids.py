@@ -1,6 +1,6 @@
 """Проверка semantic ID перед обучением двухбашенного кандгена (файлы и формат: docs/semantic_ids.md).
 
-    python scripts/check_semantic_ids.py                       # пути из configs/default.yaml (semantic_ids, data.crs.dir)
+    python scripts/check_semantic_ids.py                       # пути из configs/default.yaml (semantic_ids, data.dir)
     python scripts/check_semantic_ids.py --out outputs/semantic_ids_check   # ещё и группы коллизий / дублей в csv
 
 Что печатает:
@@ -24,8 +24,7 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
-from evaluate import config_path
-from recsys.config import load_config
+from recsys.config import config_path, load_config
 from recsys.data.crs import split_path
 from recsys.semantic_ids import RQVAE, load_semantic_ids, semantic_paths, song_key
 
@@ -93,7 +92,7 @@ def main(argv=None) -> int:
 
     cfg = load_config(a.config)
     paths = semantic_paths(cfg)
-    meta_path = split_path(cfg["data"]["crs"]["dir"], "tracks_meta")
+    meta_path = split_path(cfg["data"]["dir"], "tracks_meta")
     sid = load_semantic_ids(cfg, checkpoint=False)
     print(f"[semantic_ids] {paths['codes']}: {sid.codes.shape}, треков в tracks_meta: {len(sid)}")
 
