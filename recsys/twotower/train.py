@@ -84,17 +84,21 @@ def move(batch: Dict[str, torch.Tensor], device: torch.device) -> Dict[str, torc
 @torch.no_grad()
 def encode_examples(model: TwoTower, ex: Examples, builder: SequenceBuilder, device: torch.device,
                     precision: str = "fp32", batch_size: int = 256, history_len: Optional[int] = None,
-                    log: Optional[Callable[[str], None]] = None) -> np.ndarray:
+                    log: Optional[Callable[[str], None]] = None, nulls: Optional[List[np.ndarray]] = None) -> np.ndarray:
     """Векторы u запросов (n, dim), float32. history_len — обрезать историю (ablation по длине без переобучения).
-    log — печатать прогресс (раз в ~10%)."""
+    log — печатать прогресс (раз в ~10%); nulls — сюда вес пустого слота каждого запроса (arch v2 с shortcut)."""
     model.eval()
     loader = torch.utils.data.DataLoader(QueryDataset(ex, history_len=history_len), batch_size=batch_size,
                                          shuffle=False, collate_fn=builder.collate)
     out = []
     t0, every = time.time(), max(1, len(loader) // 10)
+    parts = model.track_parts() if hasattr(model, "track_parts") else None   # v2: r всех треков — один раз
     for i, batch in enumerate(loader, start=1):
         with autocast(device, precision):
-            out.append(model.encode_users(move(batch, device)).float().cpu())
+            b = move(batch, device)
+            out.append((model.encode_users(b, parts) if parts is not None else model.encode_users(b)).float().cpu())
+        if nulls is not None and getattr(model.user, "last_null", None) is not None:
+            nulls.append(model.user.last_null.float().cpu().numpy())
         if log and (i % every == 0 or i == len(loader)):
             done = min(i * batch_size, len(ex))
             log(f"[encode] {done}/{len(ex)} запросов, {time.time() - t0:.0f} c, осталось ~"
@@ -124,12 +128,19 @@ def recall_at(u: np.ndarray, v: np.ndarray, target: np.ndarray, ks=KS, chunk: in
 
 def evaluate(model: TwoTower, ex: Examples, builder: SequenceBuilder, device: torch.device, precision: str,
              batch_size: int = 256, by_type: bool = False) -> Dict[str, Any]:
-    u = encode_examples(model, ex, builder, device, precision, batch_size)
+    nulls: List[np.ndarray] = []
+    u = encode_examples(model, ex, builder, device, precision, batch_size, nulls=nulls)
     r = recall_at(u, item_vectors(model), ex.target)
     out = {k: v for k, v in r.items() if k != "ranks"}
+    null = np.concatenate(nulls) if nulls else None
+    if null is not None:
+        out["null"] = float(null.mean())         # средний вес «ничего из истории»
     if by_type:
         out["by_type"] = {t: {f"recall@{k}": float((r["ranks"][ex.query_type == t] <= k).mean()) for k in KS}
                           for t in sorted(set(ex.query_type))}
+        if null is not None:
+            for t in out["by_type"]:
+                out["by_type"][t]["null"] = float(null[ex.query_type == t].mean())
     return out
 
 
@@ -333,8 +344,11 @@ def train(model: TwoTower, train_ex: Examples, val_ex: Examples, builder: Sequen
                 rec = {"stage": name, "step": step_global, "loss": out["loss"].item(), "tau": out["tau"].item(),
                        "lr": opt.param_groups[0]["lr"], "s_per_step": round(per_step, 3),
                        "elapsed_s": round(time.time() - t0)}
+                if "null" in out:                        # arch v2: средний вес «ничего из истории»
+                    rec["null"] = out["null"].item()
                 write(rec)
                 log(f"[train] {name} {step + 1}/{steps}  loss {rec['loss']:.4f}  τ {rec['tau']:.4f}  "
+                    + (f"пусто {rec['null']:.2f}  " if "null" in rec else "") +
                     f"{per_step:.2f} с/шаг  прошло {fmt_time(time.time() - t0)}  до конца этапа ~"
                     f"{fmt_time(per_step * (steps - step - 1))}")
             if trc.get("eval_every") and step_global % trc["eval_every"] == 0 and step + 1 < steps:

@@ -262,3 +262,88 @@ def test_resume_from_best_without_checkpoint(tmp_path):
     lrs = [json.loads(line)["lr"] for line in (tmp_path / "log.jsonl").read_text().splitlines() if '"loss"' in line]
     assert lrs[0] < 1e-2 * 0.1                     # разгон lr после продолжения без оптимизатора
     assert hasattr(model.user.base, "peft_config") and torch.load(tmp_path / "checkpoint.pt", weights_only=False)["done"]
+
+
+# ---------------------------------------------------------------- arch v2: коды + теги, общие веса, shortcut
+
+def _tags():
+    from recsys.twotower.tags import build_track_tags
+    rng = np.random.default_rng(1)
+    names = [f"tag{i}" for i in range(12)]
+    df = pd.DataFrame({"track_id": [f"t{i}" for i in range(N_ITEMS)],
+                       "tags": [list(rng.choice(names, 3, replace=False)) for _ in range(N_ITEMS)],
+                       "tag_weights": [[100.0, 50.0, 10.0]] * N_ITEMS,
+                       "genres": [["rock"] if i % 2 else [] for i in range(N_ITEMS)]})
+    df.at[5, "tags"], df.at[5, "tag_weights"], df.at[5, "genres"] = ["unique_tag"], [100.0], []
+    return build_track_tags(df, [f"t{i}" for i in range(N_ITEMS)], min_count=2, max_per_track=8)
+
+
+def _model_v2(tags=True, shortcut=True):
+    import copy
+    from recsys.twotower.model import TwoTowerV2
+    cfg = copy.deepcopy(TCFG)
+    cfg.update(arch="v2", tags={"enabled": tags, "dim": 8}, shortcut={"enabled": shortcut})
+    codes, codebooks, g = _codes()
+    m = build_model(cfg, _base(), codes, VOCAB, codebooks, song_groups=g, tags=_tags() if tags else None)
+    assert isinstance(m, TwoTowerV2)
+    return m, cfg
+
+
+def test_track_tags():
+    t = _tags()
+    assert t.vocab[0] == "<no_tags>" and "unique_tag" not in t.vocab          # у одного трека — не в словаре
+    assert t.idx.shape == (N_ITEMS, 8) and np.allclose(t.w.sum(1), 1.0)       # веса трека нормированы
+    assert t.idx[5, 0] == 0 and t.w[5, 0] == 1.0                              # тегов не осталось -> <no_tags>
+    rock = t.vocab.index("rock")
+    assert (t.idx[1] == rock).any() and not (t.idx[0] == rock).any()
+    assert (t.idx[t.w == 0] == t.pad).all()
+
+
+def test_v2_shared_tables_and_shortcut():
+    m, _ = _model_v2()
+    assert m.user.sem is m.item.sem                                           # общая таблица кодов
+    b = SequenceBuilder(_spec(), "find")
+    batch = b.collate([(np.array([1, 2, 3]), [11, 12], 2), (np.array([], dtype=np.int32), [13], 7)])
+    out = m.loss(batch, negatives="full")
+    assert torch.isfinite(out["loss"]) and 0 <= out["null"].item() <= 1
+    assert m.user.last_null[1].item() == pytest.approx(1.0)                   # нет истории -> весь вес у пустого слота
+    out["loss"].backward()
+    assert m.user.sem.delta.weight.grad is not None and m.item.tags.emb.weight.grad is not None
+    assert m.user.k.weight.grad is not None and m.user.alpha.grad is not None
+    assert all(p.grad is None for p in m.user.base.parameters())
+
+    # градиент в таблицу кодов приходит и со стороны трековой башни (общие веса): только выход, без Qwen
+    m.zero_grad()
+    m.encode_items().sum().backward()
+    assert m.user.sem.delta.weight.grad is not None and m.user.sem.delta.weight.grad.abs().sum() > 0
+
+    u = m.encode_users(batch)
+    assert u.shape == (2, 16) and torch.allclose(u.norm(dim=1), torch.ones(2), atol=1e-5)
+    logits, labels = m.logits(u, batch["target"], "in_batch")
+    assert logits.shape == (2, 2) and labels.tolist() == [0, 1]
+
+
+def test_v2_without_tags_and_shortcut():
+    m, _ = _model_v2(tags=False, shortcut=False)
+    b = SequenceBuilder(_spec(), "find")
+    batch = b.collate([(np.array([1, 2]), [11], 3)])
+    out = m.loss(batch)
+    assert torch.isfinite(out["loss"]) and "null" not in out and m.item.tags is None
+
+
+def test_v2_train_save_load(tmp_path):
+    from recsys.twotower.train import evaluate
+    ex = _examples()
+    tr, val = ex.subset(np.arange(0, 60)), ex.subset(np.arange(60, 72))
+    b = SequenceBuilder(_spec(), "find")
+    m, cfg = _model_v2()
+    train(m, tr, val, b, cfg, str(tmp_path), torch.device("cpu"), log=lambda s: None)
+    log = [json.loads(line) for line in (tmp_path / "log.jsonl").read_text().splitlines()]
+    assert any("null" in r for r in log if "loss" in r)
+    fresh, _ = _model_v2()
+    load_weights(fresh, str(tmp_path / "last.pt"), cfg["model"]["lora"])
+    u1 = encode_examples(m.eval(), val, b, torch.device("cpu"))
+    u2 = encode_examples(fresh.eval(), val, b, torch.device("cpu"))
+    assert np.allclose(u1, u2, atol=1e-5)
+    res = evaluate(fresh, val, b, torch.device("cpu"), "fp32", by_type=True)
+    assert 0 <= res["null"] <= 1 and all("null" in v for v in res["by_type"].values())

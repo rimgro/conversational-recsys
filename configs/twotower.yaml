@@ -3,6 +3,16 @@
 # Любой параметр: --set twotower.loss.negatives=in_batch
 
 twotower:
+  arch: v2                       # v2 — коды + теги, общие таблицы башен, shortcut по истории (recsys/twotower/model.py);
+                                 # v1 — только коды, таблицы башен раздельные (первая модель, artifacts/twotower/main)
+  tags:                          # теги Last.fm и жанры трека (arch v2; recsys/twotower/tags.py)
+    enabled: true
+    min_count: 5                 # тег в словаре, если он есть хотя бы у стольких треков (~12k тегов)
+    max_per_track: 32
+    genre_weight: 0.5            # вес жанра (вес тега = вес Last.fm / 100); веса трека нормируются на сумму 1
+    dim: 256
+  shortcut:
+    enabled: true                # u += внимание запроса к трекам истории + пустой слот «ничего из истории»
   model:
     name: Qwen/Qwen3-Embedding-0.6B   # пользовательская башня; ablation: Qwen/Qwen3-0.6B
     dim: 256                     # размер u и v
@@ -44,7 +54,7 @@ twotower:
     max_steps: null              # не больше стольких шагов на этап (быстрая проверка: --set twotower.train.max_steps=20)
     stages:                      # этапы по порядку; epochs — доля эпохи train
       - {name: A, epochs: 0.3, lora: false, lr: 1.0e-3}               # Qwen заморожен: таблицы, проекция, башня треков
-      - {name: B, epochs: 1.0, lora: true, lr: 5.0e-4, lr_lora: 2.0e-4} # + LoRA на attention
+      - {name: B, epochs: 1.7, lora: true, lr: 5.0e-4, lr_lora: 2.0e-4} # + LoRA на attention (всего 2 эпохи)
 
   encode:
     batch_size: 256
