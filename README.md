@@ -158,6 +158,7 @@ scripts/                   запускать из корня репозитор
   check_semantic_ids.py    проверка semantic ID (artifacts/semantic_ids/): коллизии, порядок строк, дубли песен
   train_twotower.py        обучение двухбашенного кандгена (GPU) -> artifacts/twotower/<прогон>/
   encode_twotower.py       его векторы треков и запросов в файлы (источник twotower читает их без GPU)
+  show_twotower.py         примеры его выдачи: запрос -> цель и top-k (артист — название)
 recsys/
   schemas.py      контракты между шагами
   config.py       загрузка YAML + overrides (предупреждает об опечатках в ключах)
