@@ -2,7 +2,9 @@
 ANN не нужен). Векторы считаются заранее на GPU и лежат в папке candgen.sources.<имя>.dir:
 
   item_vectors.npy + item_ids.npy   векторы треков (n, dim) и их m4a_id
-  query_vectors_*.npz               query_id -> вектор запроса (Request.request_id = query_id датасета)
+  query_vectors_*.npz               query_id -> вектор запроса (Request.request_id = query_id датасета); все файлы
+                                    папки, имя не важно: query_vectors_train.npz (ranker_train, valid) и
+                                    query_vectors_test_public.npz (test, submit) или по частям
 
   hnsw      EmbeddingGemma-2 по тексту запроса против векторов треков из индекса hnsw-v1 (dev/hnsw);
             файлы — python scripts/encode_hnsw.py. Модель предобучена, на наших запросах не учится — утечки нет.
@@ -42,10 +44,14 @@ class _Dense(Candgen):
         ok = pos >= 0
         self.vectors[pos[ok]] = v[ok]
         self.known[pos[ok]] = True
-        self.queries: Dict[str, np.ndarray] = {}
+        # векторы запросов: одна матрица (float16, как в файлах) и номер строки по query_id — сотни тысяч запросов
+        ids_, vecs = [], []
         for path in sorted(glob.glob(os.path.join(self.dir, cfg.get("query_files", "query_vectors_*.npz")))):
             with np.load(path, allow_pickle=False) as z:
-                self.queries.update(zip(z["query_id"].astype(str), z["vectors"].astype(np.float32)))
+                ids_.append(z["query_id"].astype(str))
+                vecs.append(z["vectors"])
+        self.query_matrix = np.concatenate(vecs) if vecs else np.zeros((0, v.shape[1]), dtype=np.float16)
+        self.query_row: Dict[str, int] = {q: i for i, q in enumerate(np.concatenate(ids_))} if ids_ else {}
         self._encoder: Any = None
         self.n_missing = 0   # запросы без вектора (нет в файлах и online выключен)
 
@@ -56,7 +62,8 @@ class _Dense(Candgen):
         raise NotImplementedError
 
     def query_vector(self, ctx: Context) -> Optional[np.ndarray]:
-        u = self.queries.get(str(ctx.request.request_id)) if ctx.request.request_id else None
+        row = self.query_row.get(str(ctx.request.request_id)) if ctx.request.request_id else None
+        u = self.query_matrix[row].astype(np.float32) if row is not None else None
         if u is None and self.cfg.get("online"):
             if self._encoder is None:
                 self._encoder = self.encoder()
