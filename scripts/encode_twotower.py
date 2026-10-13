@@ -34,20 +34,32 @@ from recsys.twotower.train import KS, device_precision, encode_examples, item_ve
 CHUNK = 2000   # запросов в куске: каждый кусок сразу на диск, после обрыва считаются только недостающие
 
 
-def encode_resumable(model, ex, builder, device, precision, batch_size, history_len, parts_dir: Path, name: str):
-    """Векторы запросов кусками по CHUNK: готовые куски (parts_dir/<name>_<i>.npz с теми же query_id) берутся с
-    диска. Не хватило памяти GPU — пачка вдвое меньше, тот же кусок заново."""
+def model_stamp(path: Path) -> str:
+    """Чем посчитаны векторы: имя чекпоинта, размер и время записи. Модель переобучена в той же папке — штамп
+    другой, и старые векторы не берутся."""
+    st = path.stat()
+    return f"{path.name}:{st.st_size}:{st.st_mtime_ns}"
+
+
+def same_vectors(path: Path, query_id: np.ndarray, stamp: str) -> bool:
+    with np.load(path) as z:
+        return "model" in z and str(z["model"]) == stamp and z["query_id"].tolist() == query_id.astype(str).tolist()
+
+
+def encode_resumable(model, ex, builder, device, precision, batch_size, history_len, parts_dir: Path, name: str,
+                     stamp: str = ""):
+    """Векторы запросов кусками по CHUNK: готовые куски (parts_dir/<name>_<i>.npz с теми же query_id и той же
+    моделью — stamp) берутся с диска. Не хватило памяти GPU — пачка вдвое меньше, тот же кусок заново."""
     import torch
     parts_dir.mkdir(parents=True, exist_ok=True)
     out, n_chunks, t0 = [], (len(ex) + CHUNK - 1) // CHUNK, time.time()
     for i, start in enumerate(range(0, len(ex), CHUNK)):
         part = ex.subset(np.arange(start, min(start + CHUNK, len(ex))))
         path = parts_dir / f"{name}_{i:04d}.npz"
-        if path.exists():
+        if path.exists() and same_vectors(path, part.query_id, stamp):
             with np.load(path) as z:
-                if z["query_id"].tolist() == part.query_id.astype(str).tolist():
-                    out.append(z["vectors"])
-                    continue
+                out.append(z["vectors"])
+            continue
         while True:
             try:
                 u = encode_examples(model, part, builder, device, precision, batch_size, history_len=history_len)
@@ -58,7 +70,8 @@ def encode_resumable(model, ex, builder, device, precision, batch_size, history_
                 batch_size //= 2
                 torch.cuda.empty_cache()
                 print(f"[encode] не хватило памяти GPU: пачка {batch_size}, кусок {i + 1} заново")
-        np.savez(path.with_suffix(".tmp.npz"), query_id=part.query_id.astype(str), vectors=u.astype(np.float16))
+        np.savez(path.with_suffix(".tmp.npz"), query_id=part.query_id.astype(str), vectors=u.astype(np.float16),
+                 model=stamp)
         path.with_suffix(".tmp.npz").replace(path)
         out.append(u.astype(np.float16))
         done = min(start + CHUNK, len(ex))
@@ -88,6 +101,8 @@ def main(argv=None) -> int:
     device = pick_device(a.device)
     print(f"[encode] загружаю модель из {run_dir / a.checkpoint}...")
     model, builder, codes, tcfg = load_trained(cfg, str(run_dir / a.checkpoint), device)
+    stamp = model_stamp(run_dir / a.checkpoint)
+    cfg = {**cfg, "twotower": tcfg}        # история и запросы — как при обучении (arch, history_len), а не по --config
     precision = device_precision(device, tcfg["model"].get("precision", "bf16"))
     bs = tcfg.get("encode", {}).get("batch_size", 256)
 
@@ -101,14 +116,12 @@ def main(argv=None) -> int:
         target_path = out / f"query_vectors_{split}{suffix}.npz"
         print(f"[encode] {split}: читаю запросы...")
         ex = load_examples(cfg, split, builder.spec, codes.sid, n_users=a.n_users)
-        if target_path.exists():
-            with np.load(target_path) as z:
-                if z["query_id"].tolist() == ex.query_id.astype(str).tolist():
-                    print(f"[encode] {split}: уже посчитано ({target_path}), пропускаю")
-                    continue
+        if target_path.exists() and same_vectors(target_path, ex.query_id, stamp):
+            print(f"[encode] {split}: уже посчитано этой моделью ({target_path}), пропускаю")
+            continue
         u, bs = encode_resumable(model, ex, builder, device, precision, bs, a.history_len,
-                                 out / "encode_parts", f"{split}{suffix}")
-        np.savez(target_path, query_id=ex.query_id.astype(str), vectors=u.astype(np.float16))
+                                 out / "encode_parts", f"{split}{suffix}", stamp)
+        np.savez(target_path, query_id=ex.query_id.astype(str), vectors=u.astype(np.float16), model=stamp)
         print(f"[encode] {split}: {u.shape} -> {target_path}")
         has = ex.target >= 0
         if has.any():
