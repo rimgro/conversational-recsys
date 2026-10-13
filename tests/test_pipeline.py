@@ -85,7 +85,7 @@ def test_cli_train_evaluate_submit(cfg, res, tmp_path):
     lists = pd.read_csv(out / "test" / "lists.csv", index_col=0)
     assert {"bm25", "history", "union", "selection", "ranker"} <= set(lists.index)
     assert main(["submit"] + common) == 0
-    sub = pd.read_parquet(out / "submission.parquet")
+    sub = pd.read_parquet(out / "submission_test_public.parquet")
     assert list(sub.columns) == ["query_id", "top20", "response"] and sub["query_id"].is_unique
     assert sub["top20"].map(lambda x: len(set(x)) == len(x)).all() and sub["response"].str.len().gt(0).all()
     assert sorted(sub["query_id"]) == sorted(res.dataset.part("submit")["query_id"])

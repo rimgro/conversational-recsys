@@ -6,7 +6,8 @@
     python -m recsys train                          # обучить ранкер (ranker_train, early stopping по valid)
     python -m recsys evaluate                       # метрики всех шагов на valid и test
     python -m recsys run                            # train + evaluate
-    python -m recsys submit                         # сабмит по всему test_public
+    python -m recsys submit                         # сабмит по всему test_public -> submission_test_public.parquet
+    python -m recsys submit --test-split test_private   # ответы на test_private тем же ранкером
 
 Опции:
     --run NAME                 папка прогона runs/NAME/ (модель, отчёты, сабмит)
@@ -64,6 +65,8 @@ def build_config(a: argparse.Namespace) -> Dict[str, Any]:
         set_key(over, "run.name", a.run)
     if a.synthetic:
         set_key(over, "data.source", "synthetic")
+    if a.test_split:
+        set_key(over, "data.parts.test_split", a.test_split)
     cfg = load_config([config_path("default.yaml")] + a.config, over)
     if a.sources:
         apply_sources(cfg, a.sources)
@@ -80,6 +83,7 @@ def main(argv: List[str] = None) -> int:
     p.add_argument("--config", action="append", default=[], help="ещё YAML поверх configs/default.yaml")
     p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="параметр конфига")
     p.add_argument("--synthetic", action="store_true", help="синтетика вместо датасета")
+    p.add_argument("--test-split", help="тестовый сплит для test / submit (по умолчанию data.parts.test_split)")
     a = p.parse_args(argv)
 
     from recsys import run

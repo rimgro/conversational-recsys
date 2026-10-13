@@ -17,7 +17,7 @@ import pyarrow.parquet as pq
 from recsys.data.catalog import Catalog
 from recsys.data.crs import (EXTRA_COLUMNS, build_requests, catalog_from_meta, read_qrels, read_queries,
                              read_tracks_meta, read_users, split_path)
-from recsys.data.parts import PARTS, check_disjoint, make_part, part_split
+from recsys.data.parts import PARTS, check_disjoint, index_excludes, make_part, part_split
 from recsys.data.synthetic import make_synthetic
 from recsys.schemas import Request
 
@@ -111,8 +111,9 @@ class Dataset:
         """Запросы части (index | ranker_train | valid | test | submit), см. recsys/data/parts.py."""
         if name not in self._parts:
             pcfg = self.dcfg["parts"]
+            exclude = self.table(index_excludes(pcfg), "queries") if name == "index" else None
             self._parts[name] = make_part(name, self.table(pcfg["train_split"], "queries"),
-                                          self.table(pcfg["test_split"], "queries"), pcfg)
+                                          self.table(pcfg["test_split"], "queries"), pcfg, exclude)
             check_disjoint(self._parts)
         return self._parts[name]
 

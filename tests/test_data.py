@@ -93,3 +93,17 @@ def test_user_state(res, requests):
     assert res.users.get(r) is u                                     # один раз на пользователя
     w = u.weights(30)
     assert w.shape == u.counts.shape and (w <= u.weights()).all()     # затухание только уменьшает вес
+
+
+def test_index_does_not_depend_on_test_split():
+    """Ответы на другом тестовом сплите (test_private): index — тот же, его тексты исключаются по index_excludes."""
+    train = pd.DataFrame({"query_id": [f"q{i}" for i in range(300)], "user_id": 1, "query_type": "genre",
+                          "query": [f"text {i % 150}" for i in range(300)], "split": "train"})
+    public = train.head(40).assign(split="test_public")
+    private = train.tail(40).assign(split="test_private")
+    pcfg = {"train_split": "train", "test_split": "test_private", "index_excludes": "test_public", "seed": 1,
+            "buckets": {"index": [0, 6], "ranker_train": [6, 9], "valid": [9, 10]}, "sizes": {}}
+    a = make_part("index", train, public, {**pcfg, "test_split": "test_public"}, public)
+    b = make_part("index", train, private, pcfg, public)
+    assert a["query_id"].tolist() == b["query_id"].tolist()
+    assert not set(a["normalized"]) & set(public["query"].map(normalize_query))

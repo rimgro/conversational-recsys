@@ -30,6 +30,7 @@ import pandas as pd
 import scipy.sparse as sp
 
 from recsys.candgen.base import Candgen, Cands, register, top_positions
+from recsys.data.parts import index_excludes
 from recsys.schemas import Context
 
 TEXT_FIELDS = ["m4a_artist", "m4a_song", "m4a_album", "m4a_genres_full", "m4a_tags_full", "pseudo_caption",
@@ -154,7 +155,8 @@ class TfidfIndex:
 def index_key(name: str, spec: Dict[str, Any], data_key: str, parts_cfg: Dict[str, Any]) -> str:
     deps: Dict[str, Any] = {"spec": spec, "data": data_key, "v": INDEX_VERSION}
     if uses_index_part(spec):   # query_document зависит от части index
-        deps["parts"] = {k: parts_cfg.get(k) for k in ("train_split", "test_split", "buckets", "exclude_test_texts")}
+        deps["parts"] = {k: parts_cfg.get(k) for k in ("train_split", "buckets", "exclude_test_texts")}
+        deps["parts"]["test_split"] = index_excludes(parts_cfg)   # сплит, чьи тексты исключены из index
     return hashlib.md5(json.dumps(deps, sort_keys=True, default=str).encode()).hexdigest()[:10]
 
 

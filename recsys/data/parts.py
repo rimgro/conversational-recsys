@@ -5,7 +5,7 @@
 Поэтому train делится по тексту запроса (md5 нормализованного текста, 10 бакетов):
 
   index         бакеты 0–5   обучение кандгенов (тексты запросов приклеиваются к целям); без текстов, которые
-                             встречаются в тестовом сплите (exclude_test_texts)
+                             встречаются в сплите index_excludes (test_public; exclude_test_texts)
   ranker_train  бакеты 6–8   обучение ранкера (сэмпл sizes.ranker_train)
   valid         бакет  9     подбор политики отбора, параметров, early stopping (сэмпл sizes.valid)
   test          test_public  только итоговая оценка (сэмпл sizes.test); параметры по нему не подбираем
@@ -49,11 +49,18 @@ def part_split(part: str, pcfg: Dict[str, Any]) -> str:
     return pcfg["train_split"] if part in TRAIN_PARTS else pcfg["test_split"]
 
 
+def index_excludes(pcfg: Dict[str, Any]) -> str:
+    """Сплит, тексты которого не идут в index (data.parts.index_excludes, по умолчанию test_split)."""
+    return pcfg.get("index_excludes") or pcfg["test_split"]
+
+
 def make_part(part: str, train_queries: pd.DataFrame, test_queries: pd.DataFrame,
-              pcfg: Dict[str, Any]) -> pd.DataFrame:
+              pcfg: Dict[str, Any], exclude_queries: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """Запросы части (колонки *_queries.parquet + normalized), в фиксированном порядке.
 
     pcfg — data.parts: buckets {часть: [от, до)}, sizes {часть: N | null}, exclude_test_texts, seed.
+    exclude_queries — запросы, тексты которых не идут в index (сплит index_excludes; по умолчанию test_queries):
+    index не зависит от того, на каком тестовом сплите считаем ответы.
     """
     part_split(part, pcfg)
     seed, sizes = pcfg.get("seed", 42), pcfg.get("sizes", {})
@@ -66,7 +73,8 @@ def make_part(part: str, train_queries: pd.DataFrame, test_queries: pd.DataFrame
     mask = (buckets >= lo) & (buckets < hi)
     if part == "index":
         if pcfg.get("exclude_test_texts", True):
-            mask &= ~q["normalized"].isin(set(test_queries["query"].map(normalize_query)))
+            ex = test_queries if exclude_queries is None else exclude_queries
+            mask &= ~q["normalized"].isin(set(ex["query"].map(normalize_query)))
         return q[mask].copy()
     return sample(q[mask], sizes.get(part), seed)
 

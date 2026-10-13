@@ -21,7 +21,7 @@ pip install -r requirements.txt
 pytest -q                                   # тесты: весь пайплайн на синтетике, без файлов датасета
 
 python -m recsys run                        # обучить ранкер и посчитать метрики на valid и test -> runs/baseline/
-python -m recsys submit                     # сабмит по всему test_public -> runs/baseline/submission.parquet
+python -m recsys submit                     # сабмит по всему test_public -> runs/baseline/submission_test_public.parquet
 ```
 
 Данные — Music4All-CRS в `music4all_crs/` (`data.dir`, в git не хранится). Индексы кандгенов собираются при первом

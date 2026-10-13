@@ -273,7 +273,8 @@ def evaluate(cfg: Dict[str, Any], parts: List[str], ranker=None) -> Dict[str, An
 
 
 def submit(cfg: Dict[str, Any], part: str = "submit", path: Optional[str] = None) -> str:
-    """Сабмит: все запросы test_split без ответов -> query_id, top20 (m4a_id), response (explainer)."""
+    """Сабмит: все запросы data.parts.test_split без ответов -> query_id, top20 (m4a_id), response (explainer).
+    По умолчанию — runs/<прогон>/submission_<test_split>.parquet: public и private не перезаписывают друг друга."""
     save_config(cfg)
     pipe = Pipeline(cfg)
     k = int(cfg["eval"].get("k", 20))
@@ -290,7 +291,7 @@ def submit(cfg: Dict[str, Any], part: str = "submit", path: Optional[str] = None
     short = int((df[f"top{k}"].map(len) < k).sum())
     if short:
         pipe.res.log(f"внимание: у {short} запросов меньше {k} треков")
-    path = path or os.path.join(run_dir(cfg), "submission.parquet")
+    path = path or os.path.join(run_dir(cfg), f"submission_{cfg['data']['parts']['test_split']}.parquet")
     df.to_parquet(path, index=False)
     pipe.res.log(f"сабмит: {len(df)} запросов -> {path}")
     return path

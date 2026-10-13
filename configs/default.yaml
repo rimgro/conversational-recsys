@@ -17,7 +17,8 @@ data:
       index: [0, 6]            # обучаемые кандгены: query_document, query_tfidf, two-tower
       ranker_train: [6, 9]     # обучение ранкера
       valid: [9, 10]           # подбор весов отбора и параметров, early stopping
-    exclude_test_texts: true   # тексты, которые есть в test_split, не идут в index
+    exclude_test_texts: true   # тексты сплита index_excludes не идут в index
+    index_excludes: test_public  # не test_split: при ответах на test_private index (и обученный ранкер) те же
     sizes: {ranker_train: 30000, valid: 4000, test: 10000, submit: null}   # null — все
     seed: 42
   synthetic: {n_tracks: 5000, n_users: 300, seed: 42}
