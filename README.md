@@ -64,7 +64,7 @@ python -m recsys evaluate --set ranker.type=stub --run stub                     
 
 ## Валидация без утечки
 
-Обучаемые кандгены (`query_tfidf` и `query_document` в BM25 — тексты прошлых запросов к треку; two-tower) и ранкер
+Обучаемые кандгены (`query_tfidf` и `query_document` в BM25 — тексты прошлых запросов к треку) и ранкер
 учатся на разных запросах. Иначе на своих же запросах кандген находит цель «по памяти», ранкер учится ему доверять,
 а на тесте этой памяти нет. Поэтому train делится по тексту запроса (md5, `recsys/data/parts.py`):
 
@@ -77,6 +77,7 @@ python -m recsys evaluate --set ranker.type=stub --run stub                     
 | `submit` | test_public, все | сабмит |
 
 Перефразировки одного текста всегда в одной части; пересечение частей проверяется при загрузке.
+Two-tower учится на всём train, поэтому в признаки ранкера не идёт (`candgen.sources.twotower.features: false`).
 
 ## Конфиг ([configs/default.yaml](configs/default.yaml))
 
@@ -119,10 +120,15 @@ python scripts/make_embed.py                          # один раз: пак�
 python scripts/encode_hnsw.py                         # векторы треков (индекс hnsw-v1) и запросов частей -> artifacts/hnsw
 python -m recsys candgen --sources +hnsw --run hnsw   # что он даёт
 
-python scripts/train_twotower.py --run-dir artifacts/twotower/main      # GPU; учится только на части index
-python scripts/encode_twotower.py --run-dir artifacts/twotower/main
-python -m recsys candgen --sources +twotower --run tt
+python scripts/train_twotower.py --resume --run-dir artifacts/twotower/v2   # A100, ~6 ч; учится на всём train
+python scripts/encode_twotower.py --run-dir artifacts/twotower/v2            # векторы частей ranker_train, valid, test, submit
+python -m recsys tune-policy --sources +twotower --run tt                    # вес twotower в отборе
+python -m recsys run --sources +twotower --config runs/tt/selection.yaml --run tt
 ```
+
+Обучение и векторы — `twotower.ipynb` в Colab. Two-tower учится на всём train, поэтому его скоры в признаки
+CatBoost не идут (`features: false`): он только помогает отобрать 150 кандидатов. Нет векторов для запросов части —
+прогон останавливается с подсказкой, а не идёт молча без него.
 
 Сервис HNSW пайплайн не вызывает (ищем по тем же векторам локально); `online: true` — новые реплики диалога
 кодирует модель.

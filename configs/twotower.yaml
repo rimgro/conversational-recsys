@@ -60,4 +60,5 @@ twotower:
 
   encode:
     batch_size: 256
-    parts: [ranker_train, valid, test]   # для каких частей считать векторы запросов (scripts/encode_twotower.py)
+    parts: [ranker_train, valid, test, submit]   # векторы запросов (scripts/encode_twotower.py): ranker_train и valid —
+                                                 # обучение ранкера, test — оценка, submit — сабмит

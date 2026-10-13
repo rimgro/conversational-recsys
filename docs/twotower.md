@@ -93,8 +93,7 @@ python scripts/train_twotower.py --run-dir artifacts/twotower/smoke --n-users 30
 python scripts/train_twotower.py --run-dir artifacts/twotower/v2
 
 # векторы треков и запросов частей ranker_train, valid, test (+ recall по всему каталогу, по типам) -> в ту же папку
-python scripts/encode_twotower.py --run-dir artifacts/twotower/v2
-python scripts/encode_twotower.py --run-dir artifacts/twotower/v2 --parts submit   # для сабмита: весь test_public
+python scripts/encode_twotower.py --run-dir artifacts/twotower/v2   # части ranker_train, valid, test, submit (~40 мин на A100)
 
 # в отчёте кандгенов вместе с остальными (без GPU: читает векторы из папки)
 python -m recsys candgen --sources +twotower --set candgen.sources.twotower.dir=artifacts/twotower/v2 --run tt

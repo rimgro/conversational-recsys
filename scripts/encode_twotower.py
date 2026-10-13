@@ -1,8 +1,8 @@
 """Векторы обученного двухбашенного кандгена в файлы: треки и запросы частей датасета (GPU; дальше — без GPU).
 
-    python scripts/encode_twotower.py --run-dir artifacts/twotower/main                      # части из конфига
-    python scripts/encode_twotower.py --run-dir artifacts/twotower/main --parts submit       # весь test_public
-    python scripts/encode_twotower.py --run-dir artifacts/twotower/main --parts test --history-len 16
+    python scripts/encode_twotower.py --run-dir artifacts/twotower/v2              # ranker_train, valid, test, submit
+    python scripts/encode_twotower.py --run-dir artifacts/twotower/v2 --parts valid      # только эта часть
+    python scripts/encode_twotower.py --run-dir artifacts/twotower/v2 --parts test --history-len 16
 
 В --run-dir (или --out):
   item_vectors.npy, item_ids.npy           (n_tracks, dim) float32 и m4a_id по строкам

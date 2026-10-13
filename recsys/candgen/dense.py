@@ -83,7 +83,7 @@ class _Dense(Candgen):
         if missing > float(self.cfg.get("max_missing", 0.01)) * len(ids):
             raise ValueError(
                 f"{self.name}: нет векторов для {missing} из {len(ids)} запросов части {part} в {self.dir}. "
-                f"Посчитать: {self.how_to_build} (нужны сплиты train и test_public), "
+                f"Посчитать: {self.how_to_build} (части ranker_train, valid, test, submit), "
                 f"или выключить: --sources -{self.name}")
 
     def retrieve(self, batch: List[Context]) -> List[Cands]:
@@ -126,7 +126,7 @@ class HNSW(_Dense):
 @register("twotower", "dense")
 class TwoTower(_Dense):
     """Двухбашенный: история (semantic ID) и запрос против вектора трека."""
-    how_to_build = "python scripts/encode_twotower.py --run-dir <папка> --splits train,test_public"
+    how_to_build = "python scripts/encode_twotower.py --run-dir <папка>"
 
     def encoder(self):
         from recsys.twotower.build import OnlineEncoder
