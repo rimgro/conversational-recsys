@@ -133,7 +133,10 @@ class Dataset:
     def cutoff(self, split: str) -> Optional[int]:
         """Начало окна сплита (unix): история пользователей строго раньше (data.windows)."""
         day = self.dcfg.get("windows", {}).get(split)
-        return int(pd.Timestamp(day, tz="UTC").timestamp()) if day else None
+        if not day:
+            self.log(f"нет data.windows.{split}: граница истории — последнее прослушивание пользователя")
+            return None
+        return int(pd.Timestamp(day, tz="UTC").timestamp())
 
     def requests(self, part: str, labels: bool = True) -> List[Request]:
         """Request на каждый запрос части, в её порядке. labels=False — без ответов (как при сабмите)."""

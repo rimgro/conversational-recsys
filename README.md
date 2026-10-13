@@ -24,6 +24,9 @@ python -m recsys run                        # обучить ранкер и п�
 python -m recsys submit                     # сабмит по всему test_public -> runs/baseline/submission_test_public.parquet
 ```
 
+В Google Colab — `pipeline.ipynb`: те же шаги ячейками, всё сохраняется на Drive, ответы на test_public и на
+другой тестовый сплит (`--test-split test_private`).
+
 Данные — Music4All-CRS в `music4all_crs/` (`data.dir`, в git не хранится). Индексы кандгенов собираются при первом
 запуске (несколько минут) и кэшируются в `cache/`, как и выдача каждого кандгена: повторный прогон с другим ранкером
 или весами отбора кандгены не пересчитывает.
@@ -155,6 +158,7 @@ recsys/
   twotower/, semantic_ids.py  двухбашенный кандген и semantic ID
 scripts/                    GPU и подготовка: encode_hnsw, make_embed, train/encode/show/analyze_twotower,
                             check_semantic_ids
+pipeline.ipynb              Colab: обучение ранкера, отчёт, ответы на test_public и другой сплит
 inference.ipynb             запрос -> ответ, где цель на каждом шаге, следующая реплика
 experiments.ipynb           сравнение прогонов, разбор запроса по шагам, правила на настоящих запросах
 twotower.ipynb              обучение двухбашенного кандгена на GPU (DataSphere / Colab)
