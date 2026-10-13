@@ -21,12 +21,27 @@ def main():
     p.add_argument('--query-type', default='exact')
     p.add_argument('--exclude-m4a-id', default='')
     p.add_argument('--exclude-artist', default='')
+    p.add_argument('--api-url', default=os.environ.get('QWEN_RIGHT_URL'),
+        help='Right-tower API; --bundle then points to the split left directory')
+    p.add_argument('--api-key-file', type=Path, help='Secret file, or use QWEN_API_KEY')
+    p.add_argument('--api-timeout', type=float, default=10.)
     args = p.parse_args()
     if not 1 <= args.top_k <= 200:
         p.error('top-k must be between 1 and 200')
     history = json.loads(args.history.read_text()) if args.history else []
     if not isinstance(history, list) or not all(isinstance(t, str) for t in history):
         raise ValueError('History must be a JSON array of string m4a IDs')
+    if args.api_url:
+        from recsys.serving.client import RemoteQwenRetriever
+        key = args.api_key_file.read_text().strip() if args.api_key_file else os.environ.get('QWEN_API_KEY')
+        with RemoteQwenRetriever.from_bundle(args.bundle, args.api_url, key, args.device,
+                args.cache_dir, args.api_timeout) as model:
+            result = model.search(args.query, history=history, k=args.top_k,
+                mode='exact' if args.exact else 'hnsw', discovery=args.discovery,
+                query_type=args.query_type, exclude_m4a_id=args.exclude_m4a_id,
+                exclude_artist=args.exclude_artist)
+        print(json.dumps(result, ensure_ascii=False))
+        return
     import numpy as np
     from recsys.two_tower_qwen.bundle import QwenRetriever
     from recsys.two_tower_qwen.metrics import CatalogScorer

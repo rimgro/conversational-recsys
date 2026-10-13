@@ -1,0 +1,6 @@
+{$QWEN_DOMAIN} {
+    request_body {
+        max_size 4MB
+    }
+    reverse_proxy right-tower:8000
+}

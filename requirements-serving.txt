@@ -1,0 +1,6 @@
+# CPU index/API only. Does not install PyTorch, transformers or a Qwen backbone.
+numpy==1.26.4
+hnswlib==0.8.0
+fastapi==0.143.0
+pydantic==2.14.1
+uvicorn==0.54.0

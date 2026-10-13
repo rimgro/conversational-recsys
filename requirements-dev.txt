@@ -1,2 +1,4 @@
 -r requirements.txt
+-r requirements-serving.txt
+-r requirements-serving-client.txt
 pytest==8.4.2

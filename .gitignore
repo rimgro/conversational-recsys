@@ -37,3 +37,5 @@ submission.json
 *.zip
 *.log
 *.pid
+/deploy/right-tower/secrets/
+/serving-releases/

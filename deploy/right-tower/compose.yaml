@@ -1,0 +1,42 @@
+services:
+  right-tower:
+    build:
+      context: ../..
+      dockerfile: deploy/right-tower/Dockerfile
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ports: ["127.0.0.1:8000:8000"]
+    volumes:
+      - type: bind
+        source: ${QWEN_RIGHT_BUNDLE_HOST:?Set the absolute right bundle directory}
+        target: /data/right
+        read_only: true
+    secrets: [qwen_api_key]
+    mem_limit: 1g
+    cpus: 2
+    pids_limit: 128
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+  tls:
+    image: caddy:2
+    profiles: [tls]
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      QWEN_DOMAIN: ${QWEN_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      right-tower:
+        condition: service_healthy
+
+secrets:
+  qwen_api_key:
+    file: ./secrets/qwen_api_key
+volumes:
+  caddy_data:
+  caddy_config:

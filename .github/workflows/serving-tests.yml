@@ -1,0 +1,40 @@
+name: CPU right-tower deployment
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  api-and-container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements-serving.txt -r requirements-serving-client.txt pytest==8.4.2
+        env:
+          HNSWLIB_NO_NATIVE: '1'
+      - run: python -m pytest -q tests/test_serving_api.py
+      - run: PYTHONPATH=. python tests/serving_fixture.py --output /tmp/qwen-api-fixture
+      - run: docker build -t qwen-right:test -f deploy/right-tower/Dockerfile .
+      - name: Start container with synthetic export
+        run: >-
+          docker run -d --name qwen-right-test -p 127.0.0.1:8000:8000
+          --read-only --tmpfs /tmp:rw,size=32m --cap-drop ALL --security-opt no-new-privileges
+          -e QWEN_API_KEY=synthetic-ci-api-key-0123456789 -e QWEN_API_KEY_FILE=
+          -v /tmp/qwen-api-fixture/split/right:/data/right:ro qwen-right:test
+      - name: Verify container readiness and vector API
+        env:
+          QWEN_API_KEY: synthetic-ci-api-key-0123456789
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8000/health; then break; fi
+            sleep 2
+          done
+          python tools/smoke_candidate_api.py --right /tmp/qwen-api-fixture/split/right --url http://127.0.0.1:8000
+      - if: always()
+        run: docker logs qwen-right-test || true
+      - if: always()
+        run: docker rm -f qwen-right-test || true
