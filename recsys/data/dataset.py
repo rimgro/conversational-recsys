@@ -139,6 +139,7 @@ class Dataset:
         t0 = time.time()
         split = part_split(part, self.dcfg["parts"])
         queries = self.part(part)
+        self.log(f"{part}: читаю историю {queries['user_id'].nunique()} пользователей ({split}), ~1–2 мин...")
         users = self.users(split, queries["user_id"].unique())
         qrels = self.table(split, "qrels") if labels else None
         if qrels is not None:
