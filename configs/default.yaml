@@ -48,6 +48,8 @@ candgen:
     # плотные (recsys/candgen/dense.py): векторы считаются заранее на GPU
     hnsw:              {enabled: false, dir: artifacts/hnsw, online: false}       # scripts/encode_hnsw.py
     twotower:          {enabled: false, dir: artifacts/twotower/v2, online: false, checkpoint: model.pt, features: false}
+    twotower_pavel:    {enabled: false, dir: artifacts/twotower_pavel, top_k: 200, features: false}   # готовые top-200
+                               # (recsys/candgen/precomputed.py): train_top200.parquet, test_public_top200.parquet
   card_index:                  # карточка трека для card_bm25 и relisten (recsys/candgen/card.py)
     k1: 1.2
     b: 0.75

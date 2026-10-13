@@ -137,3 +137,18 @@ def test_profile_and_summary_for_dialog(res, catalog):
     assert ctx.user.cutoff == 11 and ctx.summary.include_tags
     assert build_profile(hist, catalog).n_known_tracks == 1
     assert RuleSummarizer(catalog).summarize(Request(dialog=[Message("user", "jazz")])).include_tags == ["jazz"]
+
+
+def test_precomputed_lists(res, catalog, tmp_path):
+    """Готовые списки: по query_id, в порядке файла, без треков не из каталога; нет списка — ошибка покрытия."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    ids = [str(t) for t in catalog.track_ids[:5]]
+    pq.write_table(pa.table({"query_id": ["q1"], "top200": [[ids[3], "нет_такого", ids[1], ids[3]]],
+                             "scores": [[0.9, 0.8, 0.7, 0.6]]}), tmp_path / "x_top200.parquet")
+    pc = REGISTRY["twotower_pavel"]({"top_k": 200, "dir": str(tmp_path)}, res)
+    got = pc.retrieve([_ctx(res, "x", request_id="q1")])[0]
+    assert got.ids.tolist() == [3, 1] and np.allclose(got.scores, [0.9, 0.7])
+    pc.check_coverage([_ctx(res, "x", request_id="q1")], "test")
+    with pytest.raises(ValueError, match="нет списков для 1 из 2"):
+        pc.check_coverage([_ctx(res, "x", request_id="q1"), _ctx(res, "x", request_id="q2")], "test")

@@ -3,14 +3,14 @@
   text     bm25, metadata_bm25, tfidf, query_tfidf, metadata_char (text.py), card_bm25 (card.py)
   history  history, history_recent, history_frequency, favorite_artists (history.py), relisten (card.py)
   audio    audio_taste, audio_recent, audio_seed (audio.py)
-  dense    hnsw, twotower (dense.py)
+  dense    hnsw, twotower (dense.py); twotower_pavel — готовые списки (precomputed.py)
 """
 from __future__ import annotations
 
 import time
 from typing import Any, Dict, List, Optional
 
-from recsys.candgen import audio, card, dense, history, text  # noqa: F401  (регистрация кандгенов)
+from recsys.candgen import audio, card, dense, history, precomputed, text  # noqa: F401  (регистрация кандгенов)
 from recsys.candgen import cache
 from recsys.candgen.base import REGISTRY, Candgen, Cands, top_positions
 from recsys.schemas import Context
