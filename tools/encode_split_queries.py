@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import time
+import requests
 
 os.environ['USE_TF']='0'
 os.environ['TOKENIZERS_PARALLELISM']='false'
@@ -51,10 +52,22 @@ def main():
     p.add_argument('--credentials',type=Path,required=True)
     p.add_argument('--folder-id',required=True)
     p.add_argument('--quota-project',required=True)
+    p.add_argument('--fixed-batch',type=int,choices=(32,64,128,256),
+        help='Preserve the proven batch shape when resuming durable vectors')
     args=p.parse_args()
     sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'jobs/colab_continue'))
     from drive_store import DriveStore
     store=DriveStore(args.credentials,args.folder_id,args.quota_project)
+    def upload(path,relative):
+        started=time.monotonic();attempt=0
+        while True:
+            try:return store.put(path,relative)
+            except Exception as error:
+                code=getattr(getattr(error,'response',None),'status_code',None)
+                transient=isinstance(error,(requests.exceptions.ConnectionError,requests.exceptions.Timeout)) or code in (429,500,502,503,504) or any(('HTTP '+str(c)) in str(error) for c in (429,500,502,503,504))
+                if not transient or time.monotonic()-started>900 or time.time()>args.deadline_unix-120:raise
+                attempt+=1;print(json.dumps({'drive_retry':attempt,'error_type':type(error).__name__,'http_status':code}),flush=True)
+                time.sleep(min(30,2**min(attempt,5)))
     args.output.mkdir(parents=True,exist_ok=True)
     inputs={}
     for split in ('test_public','train'):
@@ -73,16 +86,18 @@ def main():
     report={'status':'benchmarking','identity':identity,'queries_total':sum(len(x[0]) for x in inputs.values()),
         'gpu':torch.cuda.get_device_name(),'training_updates':0}
     def publish():
-        atomic(args.output/'status.json',report);store.put(args.output/'status.json','gpu/status.json')
+        atomic(args.output/'status.json',report);upload(args.output/'status.json','gpu/status.json')
     publish()
     progress_path=args.output/'progress.json'
     progress=json.loads(progress_path.read_text()) if progress_path.exists() else {
         'identity':identity,'completed':{'test_public':0,'train':0},'chunks':[]}
     if progress['identity']!=identity:raise RuntimeError('Incompatible resumed encoding job')
+    if progress.get('batch') and args.fixed_batch and progress['batch']!=args.fixed_batch:
+        raise RuntimeError('Resumed batch shape differs')
     rates=[]
     rng=np.random.default_rng(42)
     samples={s:rng.choice(len(v[0]),min(1024,len(v[0])),replace=False) for s,v in inputs.items()}
-    for batch in (32,64,128,256):
+    for batch in ((args.fixed_batch,) if args.fixed_batch else (32,64,128,256)):
         if time.time()>args.deadline_unix-240:break
         try:
             frame,profiles,_=inputs['test_public']
@@ -103,6 +118,7 @@ def main():
             print(json.dumps({'batch':batch,'status':'oom'}),flush=True)
     if not rates:raise RuntimeError('No successful GPU benchmark')
     best=min(rates,key=lambda r:r['encoding_seconds_estimate'])
+    progress['batch']=best['batch']
     remaining_queries=sum(len(v[0])-progress['completed'][s] for s,v in inputs.items())
     # Allows both slower batches and durable-upload overhead; minimum upload estimate
     # is 3 seconds per 4096 rows plus two minutes for final reports and release.
@@ -120,7 +136,7 @@ def main():
     if cosine.min()<.999:raise RuntimeError('Batch inference disagrees with frozen reference')
     report['batch_reference_min_cosine']=float(cosine.min())
     report['status']='running';publish()
-    atomic(progress_path,progress);store.put(progress_path,'gpu/progress.json')
+    atomic(progress_path,progress);upload(progress_path,'gpu/progress.json')
     for split,(frame,profiles,_) in inputs.items():
         while progress['completed'][split]<len(frame):
             if time.time()>args.deadline_unix-150:
@@ -133,11 +149,11 @@ def main():
             name=f'vectors/{split}/{first:07d}_{end:07d}.npy'
             target=args.output/name;target.parent.mkdir(parents=True,exist_ok=True)
             np.save(target,vector,allow_pickle=False)
-            store.put(target,name)
+            upload(target,name)
             progress['chunks'].append({'name':name,'split':split,'first':first,'end':end,
                 'sha256':sha256(target),'size':target.stat().st_size})
             progress['completed'][split]=end
-            atomic(progress_path,progress);store.put(progress_path,'gpu/progress.json')
+            atomic(progress_path,progress);upload(progress_path,'gpu/progress.json')
             elapsed=time.perf_counter()-started
             report.update(completed=progress['completed'],last_chunk_qps=(end-first)/elapsed,
                 estimated_remaining_seconds=sum(len(v[0])-progress['completed'][s] for s,v in inputs.items())/((end-first)/elapsed))
