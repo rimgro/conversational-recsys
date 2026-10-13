@@ -63,7 +63,7 @@ python -m recsys evaluate --set ranker.type=stub --run stub                     
 
 Плюс nDCG@20 и recall по типам запросов (тип × список), какой фильтр выкинул цель, и `lists.csv`, `*_by_type.csv`,
 `per_list.parquet` (запрос × список: место цели). Метрика как в датасете: nDCG@20 с одной целью, для `similar_to`
-из выдачи убираются трек-образец и его артист. Сравнение прогонов и разбор запроса по шагам — `experiments.ipynb`.
+из выдачи убираются трек-образец и его артист.
 
 ## Валидация без утечки
 
@@ -160,7 +160,6 @@ scripts/                    GPU и подготовка: encode_hnsw, make_embed
                             check_semantic_ids
 pipeline.ipynb              Colab: обучение ранкера, отчёт, ответы на test_public и другой сплит
 inference.ipynb             запрос -> ответ, где цель на каждом шаге, следующая реплика
-experiments.ipynb           сравнение прогонов, разбор запроса по шагам, правила на настоящих запросах
 twotower.ipynb              обучение двухбашенного кандгена на GPU (DataSphere / Colab)
 reference/team1/            ноутбуки и артефакты бейзлайна team1 (эталон чисел)
 docs/                       датасет, API сервисов, semantic ID, two-tower
