@@ -1,0 +1,7 @@
+# Отбор лучшего прогона (two_fix_pfeat, test nDCG@20 0.488): голосуют обе башни, bm25 и history, сила голоса 1.
+# Веса заданы руками, а не tune-policy: башни учились на всём train, и на valid их сила завышена (docs/experiments.md).
+#   python -m recsys run --run two_fix_pfeat --sources +twotower,+twotower_pavel --config configs/selection_two_towers.yaml \
+#     --set candgen.sources.twotower.features=true --set candgen.sources.twotower_pavel.features=true
+selection:
+  rrf_k: 60
+  weights: {bm25: 1, metadata_bm25: 0, tfidf: 0, query_tfidf: 0, metadata_char: 0, history: 1, history_recent: 0, history_frequency: 0, favorite_artists: 0, audio_taste: 0, audio_recent: 0, twotower: 1, twotower_pavel: 1}

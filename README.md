@@ -161,7 +161,7 @@ scripts/                    GPU и подготовка: encode_hnsw, make_embed
 pipeline.ipynb              Colab: обучение ранкера, отчёт, ответы на test_public и другой сплит
 twotower.ipynb              обучение двухбашенного кандгена на GPU (DataSphere / Colab)
 reference/team1/            ноутбуки и артефакты бейзлайна team1 (эталон чисел)
-docs/                       датасет, API сервисов, semantic ID, two-tower
+docs/                       датасет, API сервисов, semantic ID, two-tower; experiments.md — результаты экспериментов
 jobs/evaluate.yaml          python -m recsys run в DataSphere Jobs
 llm_gemma_service/          Gemma-сервис для текста ответа (configs/gemma.yaml)
 ```
