@@ -41,9 +41,11 @@ def retrieve(candgens: List[Candgen], contexts: List[Context], res, part: Option
     out: Dict[str, List[Cands]] = {}
     for cg in candgens:
         path = cache.cache_path(cache_dir, part, cg, query_ids, res.dataset.source_key) if part else None
+        t0 = time.time()
         got = cache.load(path, query_ids) if path else None
-        if got is None:
-            t0 = time.time()
+        if got is not None:
+            res.log(f"{part}: {cg.name} с диска за {time.time() - t0:.0f} c")
+        else:
             got = []
             for start in range(0, len(contexts), batch_size):
                 got.extend(cg.retrieve(contexts[start:start + batch_size]))

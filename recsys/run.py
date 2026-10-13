@@ -51,9 +51,12 @@ def recommend_part(pipe: Pipeline, part: str, rank: bool, labels: bool = True) -
     size = int(pipe.cfg.get("run", {}).get("chunk", 20000))
     t0 = time.time()
     for n, start in enumerate(range(0, len(requests), size)):
-        contexts = res.contexts(requests[start:start + size])
+        end = min(start + size, len(requests))
+        res.log(f"{part}: разбор запросов {start}–{end} (правила, профиль пользователя)...")
+        contexts = res.contexts(requests[start:end])
         name = part if len(requests) <= size else f"{part}/{n:03d}"
         lists = pipe.retrieve(contexts, name)
+        res.log(f"{part}: отбор кандидатов для {len(contexts)} запросов...")
         out = []
         for i, ctx in enumerate(contexts):
             own = {s: lists[s][i] for s in pipe.sources}
