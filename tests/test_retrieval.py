@@ -118,6 +118,10 @@ def test_dense_reads_vectors(cfg, res, catalog, tmp_path):
     with pytest.warns(UserWarning, match="нет вектора запроса"):
         assert len(dense.retrieve([_ctx(res, "x", request_id="нет")])[0]) == 0
     assert dense.n_missing == 1
+    ok, missing = _ctx(res, "x", request_id="q1"), _ctx(res, "x", request_id="нет")
+    dense.check_coverage([ok], "test")
+    with pytest.raises(ValueError, match="нет векторов для 1 из 2"):
+        dense.check_coverage([ok, missing], "test")
     with pytest.raises(FileNotFoundError, match="encode_hnsw"):
         REGISTRY["hnsw"]({"dir": str(tmp_path / "нет")}, res)
 

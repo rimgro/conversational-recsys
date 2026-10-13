@@ -40,6 +40,8 @@ def retrieve(candgens: List[Candgen], contexts: List[Context], res, part: Option
     cache_dir = res.cfg["data"].get("cache_dir")
     out: Dict[str, List[Cands]] = {}
     for cg in candgens:
+        if part and hasattr(cg, "check_coverage"):   # плотные: векторы запросов должны быть посчитаны
+            cg.check_coverage(contexts, part)
         path = cache.cache_path(cache_dir, part, cg, query_ids, res.dataset.source_key) if part else None
         t0 = time.time()
         got = cache.load(path, query_ids) if path else None

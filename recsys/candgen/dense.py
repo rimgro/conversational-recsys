@@ -73,6 +73,19 @@ class _Dense(Candgen):
     def encoder_input(self, ctx: Context):
         return ctx
 
+    def check_coverage(self, contexts: List[Context], part: str) -> None:
+        """Векторы есть для запросов части? Нет для больше max_missing (по умолчанию 1%) — ошибка с подсказкой,
+        а не молча пустые списки: без векторов кандген ничего не даёт, а ранкер учится без него."""
+        if self.cfg.get("online"):
+            return
+        ids = [str(c.request.request_id) for c in contexts]
+        missing = sum(q not in self.query_row for q in ids)
+        if missing > float(self.cfg.get("max_missing", 0.01)) * len(ids):
+            raise ValueError(
+                f"{self.name}: нет векторов для {missing} из {len(ids)} запросов части {part} в {self.dir}. "
+                f"Посчитать: {self.how_to_build} (нужны сплиты train и test_public), "
+                f"или выключить: --sources -{self.name}")
+
     def retrieve(self, batch: List[Context]) -> List[Cands]:
         out = []
         for ctx in batch:
@@ -99,7 +112,7 @@ class _Dense(Candgen):
 @register("hnsw", "dense")
 class HNSW(_Dense):
     """EmbeddingGemma-2: текст последней реплики против векторов треков (метаданные + текст песни)."""
-    how_to_build = "python scripts/encode_hnsw.py"
+    how_to_build = "python scripts/encode_hnsw.py --parts ranker_train,valid,test,submit"
 
     def encoder(self):
         from recsys.candgen.query_embedder import GemmaQueryEmbedder
@@ -113,7 +126,7 @@ class HNSW(_Dense):
 @register("twotower", "dense")
 class TwoTower(_Dense):
     """Двухбашенный: история (semantic ID) и запрос против вектора трека."""
-    how_to_build = "python scripts/encode_twotower.py --run-dir <папка>"
+    how_to_build = "python scripts/encode_twotower.py --run-dir <папка> --splits train,test_public"
 
     def encoder(self):
         from recsys.twotower.build import OnlineEncoder
