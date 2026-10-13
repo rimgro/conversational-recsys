@@ -7,7 +7,7 @@
   5. ответ: шаблон или LLM                                                 explain.py
 
 Один код для всего: пачка запросов части датасета (оценка, обучение ранкера, сабмит — recsys/run.py) и
-одна реплика в диалоге (Pipeline.run -> Response, ноутбук inference.ipynb).
+одна реплика в диалоге (Pipeline.run -> Response).
 """
 from __future__ import annotations
 

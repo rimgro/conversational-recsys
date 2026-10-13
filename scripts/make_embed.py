@@ -5,7 +5,7 @@
     !python scripts/make_embed.py             # из ячейки ноутбука DataSphere
 
 GPU (cuda, float16), если он есть, иначе CPU (float32). Веса: в DataSphere — /home/jupyter/project/hf_cache
-(диск проекта), локально — ~/.cache/huggingface; дальше scripts/encode_hnsw.py и inference.ipynb (online) берут модель оттуда.
+(диск проекта), локально — ~/.cache/huggingface; дальше scripts/encode_hnsw.py и кандген hnsw (online) берут модель оттуда.
 Нужен доступ к модели на Hugging Face: принять лицензию google/embeddinggemma-2 и задать HF_TOKEN
 (в DataSphere — секрет проекта; локально — переменная окружения или файл .env). Код выхода 1 при ошибке.
 """

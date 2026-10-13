@@ -111,7 +111,7 @@ def load_trained(cfg: Dict[str, Any], checkpoint: str, device: Optional[torch.de
 
 
 class OnlineEncoder:
-    """Вектор u для нового запроса (демо, inference.ipynb): Request -> история + последняя реплика -> u."""
+    """Вектор u для нового запроса (реплика диалога): Request -> история + последняя реплика -> u."""
 
     def __init__(self, model: TwoTower, builder: SequenceBuilder, codes: Codes, history_len: int = 64,
                  max_query_tokens: int = 96, precision: str = "bf16"):

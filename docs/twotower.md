@@ -104,7 +104,7 @@ python -m recsys run --sources +twotower --config runs/tt/selection.yaml --run t
 
 Векторы запросов привязаны к частям датасета (`data.parts`): после изменения частей их нужно пересчитать.
 
-В `inference.ipynb` (демо) — `candgen.sources.twotower.online: true`: запросы, которых нет в файлах, кодирует модель
+Для новых реплик диалога (`Pipeline.run`) — `candgen.sources.twotower.online: true`: запросы, которых нет в файлах, кодирует модель
 (нужны torch и веса; на GPU быстро).
 
 ## Ablation
