@@ -11,6 +11,14 @@ twotower:
     max_per_track: 32
     genre_weight: 0.5            # вес жанра (вес тега = вес Last.fm / 100); веса трека нормируются на сумму 1
     dim: 256
+  lazy:                          # только arch: lazy (configs/lazy.yaml, docs/lazy.md)
+    mode: encdec                 # encdec — энкодер истории + Qwen по запросу с cross-attention | prompt — история в промпте
+    encoder_layers: 0
+    cross_every: 1
+  item:
+    text:                        # arch lazy: векторы названий треков (scripts/encode_item_text.py)
+      enabled: false
+      path: artifacts/item_text/qwen3emb.npz
   shortcut:
     enabled: true                # u += внимание запроса к трекам истории + пустой слот «ничего из истории»
   model:
@@ -30,6 +38,8 @@ twotower:
     history_len: 64              # последних уникальных треков истории (от старых к новым), по 4 токена на трек
     history_dropout: 0.5         # доля примеров train, где история обрезается до случайной длины 0..history_len
     max_query_tokens: 96
+    history_order: decay         # arch lazy: decay — по сумме exp(-давность / decay_days) | recent — последние
+    decay_days: 180
     instruction: "Given a user's listening history and a request, retrieve the music track the user wants"
 
   loss:
