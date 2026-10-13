@@ -46,6 +46,19 @@ def build_cfg(a: argparse.Namespace) -> dict:
     return load_config([config_path("default.yaml"), config_path("twotower.yaml")] + a.config, over)
 
 
+def flops_report(tcfg: dict, base, ex, builder) -> dict:
+    """arch lazy: FLOPs на запрос при средней длине истории и текста этого train (recsys/twotower/lazy.py)."""
+    from recsys.twotower.lazy import lazy_flops
+    qm = base.get_base_model() if hasattr(base, "get_base_model") else base
+    L = float(np.mean([len(ex.histories[u]) for u in ex.user])) if len(ex) else 0.0
+    T = float(np.mean([len(q) for q in ex.query_tokens])) + len(builder.prefix) + 1 if len(ex) else 0.0
+    lz = tcfg.get("lazy", {})
+    f = lazy_flops(qm.config, L, T, lz.get("mode", "encdec"), lz.get("encoder_layers", 0), lz.get("cross_every", 1))
+    print(f"[twotower] FLOPs на запрос (GFLOP; история {L:.0f} треков, текст {T:.0f} токенов): "
+          + ", ".join(f"{k} {v / 1e9:.1f}" for k, v in f.items() if not k.startswith("cache")))
+    return {"mean_history": L, "mean_text_tokens": T, **f}
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--run-dir", required=True, help="куда писать модель и логи (например, artifacts/twotower/main)")
@@ -60,9 +73,18 @@ def main(argv=None) -> int:
     cfg = build_cfg(a)
     run_dir = Path(a.run_dir)
     saved = [p for p in (run_dir / "checkpoint.pt", run_dir / "model.pt") if p.exists()]
+    if not a.resume and (saved or (run_dir / "last.pt").exists()):
+        raise SystemExit(f"[twotower] в {run_dir} уже есть обученная модель: новый прогон — новая папка --run-dir, "
+                         f"продолжить этот — --resume (иначе model.pt, checkpoint.pt и log.jsonl перезапишутся)")
     if a.resume and saved:           # тот же конфиг, что при старте: иначе веса и этапы не совпадут
         import torch
-        cfg["twotower"] = torch.load(saved[0], map_location="cpu", weights_only=False)["twotower"]
+        old = torch.load(saved[0], map_location="cpu", weights_only=False)["twotower"]
+        model_keys = [k for k in set(old) | set(cfg["twotower"]) if k not in ("train", "encode")]
+        changed = [k for k in sorted(model_keys) if old.get(k) != cfg["twotower"].get(k)]
+        if (a.config or a.set) and changed:
+            raise SystemExit(f"[twotower] {saved[0]} обучен с другой моделью ({', '.join(changed)} не совпадают с "
+                             f"--config / --set): это другой прогон — нужна своя папка --run-dir")
+        cfg["twotower"] = old
         print(f"[twotower] --resume: конфиг twotower из {saved[0]} (--set для twotower игнорируются)")
     tcfg = cfg["twotower"]
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -89,6 +111,8 @@ def main(argv=None) -> int:
     print("[twotower] собираю модель (группы «одна песня» для маски дублей)...")
     model, _ = new_model(cfg, codes, base=base, log_q=target_log_q(train_ex, len(codes.codes)))
     builder = make_builder(cfg, spec, codes.codes.shape[1])
+    if tcfg.get("arch") == "lazy":
+        flops_report(tcfg, base, train_ex, builder)
 
     best = train(model, train_ex, val_ex, builder, tcfg, str(run_dir), device, resume=a.resume)
     print(f"[twotower] итоговая валидация на всех {len(val_ex)} запросах валидации...")
@@ -96,6 +120,8 @@ def main(argv=None) -> int:
                     by_type=True)   # модель после последнего шага, вся валидация
     result = {"best_val": best, "last_val": full, "n_train": len(train_ex), "n_val": len(val_ex),
               "git_commit": git_commit()}
+    if tcfg.get("arch") == "lazy":
+        result["flops"] = flops_report(tcfg, base, train_ex, builder)
     (run_dir / "metrics.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[twotower] лучшее на валидации: {best}\nрезультат: {run_dir}")
     return 0

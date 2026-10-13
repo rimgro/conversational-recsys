@@ -145,13 +145,17 @@ def evaluate(model: TwoTower, ex: Examples, builder: SequenceBuilder, device: to
 
 
 def param_groups(model: TwoTower, stage: Dict[str, Any], weight_decay: float) -> List[Dict[str, Any]]:
-    """Новые параметры — stage.lr, LoRA — stage.lr_lora; без weight decay у τ и смещений."""
-    groups: Dict[str, List[torch.nn.Parameter]] = {"new": [], "new_nd": [], "lora": []}
+    """Новые параметры — stage.lr, LoRA — stage.lr_lora; копии слоёв Qwen (arch lazy: энкодер, cross-attention;
+    кроме гейтов) — stage.lr_copied (по умолчанию как LoRA): они уже обучены, большой lr их сломает.
+    Без weight decay у τ, смещений и норм."""
+    groups: Dict[str, List[torch.nn.Parameter]] = {"new": [], "new_nd": [], "lora": [], "copied": [], "copied_nd": []}
     for name, p in model.named_parameters():
         if not p.requires_grad:
             continue
         if "lora_" in name:
             groups["lora"].append(p)
+        elif name.startswith(("user.encoder.", "user.enc_norm.", "user.xattn.")) and not name.endswith(".gate"):
+            groups["copied" if p.ndim >= 2 else "copied_nd"].append(p)
         elif p.ndim < 2 or name == "log_tau":
             groups["new_nd"].append(p)
         else:
@@ -161,6 +165,8 @@ def param_groups(model: TwoTower, stage: Dict[str, Any], weight_decay: float) ->
         {"params": groups["new"], "lr": lr, "weight_decay": weight_decay},
         {"params": groups["new_nd"], "lr": lr, "weight_decay": 0.0},
         {"params": groups["lora"], "lr": stage.get("lr_lora", lr), "weight_decay": weight_decay},
+        {"params": groups["copied"], "lr": stage.get("lr_copied", stage.get("lr_lora", lr)), "weight_decay": weight_decay},
+        {"params": groups["copied_nd"], "lr": stage.get("lr_copied", stage.get("lr_lora", lr)), "weight_decay": 0.0},
     ) if g["params"]]
 
 
@@ -346,9 +352,12 @@ def train(model: TwoTower, train_ex: Examples, val_ex: Examples, builder: Sequen
                        "elapsed_s": round(time.time() - t0)}
                 if "null" in out:                        # arch v2: средний вес «ничего из истории»
                     rec["null"] = out["null"].item()
+                if "gate" in out:                        # arch lazy: средний |tanh(g)| cross-attention
+                    rec["gate"] = out["gate"].item()
                 write(rec)
                 log(f"[train] {name} {step + 1}/{steps}  loss {rec['loss']:.4f}  τ {rec['tau']:.4f}  "
-                    + (f"пусто {rec['null']:.2f}  " if "null" in rec else "") +
+                    + (f"пусто {rec['null']:.2f}  " if "null" in rec else "")
+                    + (f"гейт {rec['gate']:.3f}  " if "gate" in rec else "") +
                     f"{per_step:.2f} с/шаг  прошло {fmt_time(time.time() - t0)}  до конца этапа ~"
                     f"{fmt_time(per_step * (steps - step - 1))}")
             if trc.get("eval_every") and step_global % trc["eval_every"] == 0 and step + 1 < steps:

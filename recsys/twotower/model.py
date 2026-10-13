@@ -376,9 +376,9 @@ def load_base(name: str, precision: str = "bf16", attn_implementation: Optional[
 
 def build_model(tcfg: Dict[str, Any], base: nn.Module, codes: np.ndarray, vocab_sizes: Sequence[int],
                 codebooks: Optional[np.ndarray] = None, song_groups: Optional[np.ndarray] = None,
-                log_q: Optional[np.ndarray] = None, tags=None) -> TwoTower:
+                log_q: Optional[np.ndarray] = None, tags=None, item_text: Optional[np.ndarray] = None) -> TwoTower:
     """tcfg — раздел twotower конфига; base — Qwen (load_base) или маленькая модель в тестах.
-    tags — TrackTags (tags.py) для arch: v2 с тегами."""
+    tags — TrackTags (tags.py) для arch: v2 / lazy с тегами; item_text — векторы названий треков (arch: lazy)."""
     init = tcfg.get("codes", {}).get("init", "centroids")
     dim = tcfg.get("model", {}).get("dim", 256)
     lcfg = tcfg.get("loss", {})
@@ -387,10 +387,13 @@ def build_model(tcfg: Dict[str, Any], base: nn.Module, codes: np.ndarray, vocab_
     kw = dict(song_groups=song_groups, temperature=lcfg.get("temperature", 0.05),
               learn_temperature=lcfg.get("learn_temperature", True), log_q=log_q)
     arch = tcfg.get("arch", "v1")
+    if arch == "lazy":
+        from recsys.twotower.lazy import build_lazy
+        return build_lazy(tcfg, base, codes, vocab_sizes, codebooks, tags=tags, item_text=item_text, **kw)
     if arch == "v1":
         return TwoTower(UserTower(base, sem, dim), ItemTower(vocab_sizes, dim, codebooks, init=init), codes, **kw)
     if arch != "v2":
-        raise ValueError(f"twotower.arch: v1 | v2, а не {arch}")
+        raise ValueError(f"twotower.arch: v1 | v2 | lazy, а не {arch}")
     tcfg_tags = tcfg.get("tags", {})
     table = None
     if tcfg_tags.get("enabled", True):
