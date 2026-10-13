@@ -311,7 +311,8 @@ def train(model: TwoTower, train_ex: Examples, val_ex: Examples, builder: Sequen
             start = ck["step_in_stage"]
             if start > 0 and "optimizer" in ck:
                 opt.load_state_dict(ck["optimizer"])
-                scaler.load_state_dict(ck["scaler"])
+                if ck.get("scaler"):                 # пустое — сохранено в bf16 (A100), а продолжаем в fp16 (T4)
+                    scaler.load_state_dict(ck["scaler"])
             elif start > 0:                              # с model.pt: моменты Adam с нуля — плавный разгон lr
                 rewarm = REWARM_STEPS
         warmup = int(trc.get("warmup", 0.03) * steps)
