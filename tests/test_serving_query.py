@@ -35,7 +35,7 @@ def test_left_only_loader_uses_same_weights_history_and_encoding_recipe(tmp_path
     class Tokenizer:
         padding_side = "right"
         def __call__(self, *args, **kwargs):
-            return {'input_ids': torch.tensor([[4,5,0]]), 'attention_mask': torch.tensor([[1,1,0]])}
+            return {'input_ids': torch.tensor([[4,5,0]]*len(args[0])), 'attention_mask': torch.tensor([[1,1,0]]*len(args[0]))}
     monkeypatch.setattr(query, "load_backbone", lambda *a, **kw: (backbone(), Tokenizer()))
     monkeypatch.setattr(query.AutoTokenizer, "from_pretrained", lambda *a, **kw: Tokenizer())
     encoder = query.QwenQueryEncoder(tmp_path / "release/left")
@@ -52,6 +52,17 @@ def test_left_only_loader_uses_same_weights_history_and_encoding_recipe(tmp_path
     assert vector.shape == (256,) and np.isfinite(vector).all()
     assert np.linalg.norm(vector) == pytest.approx(1, abs=1e-6)
     assert all(not p.requires_grad for p in encoder.tower.parameters())
+    # Full-split vector stage uses fresh query text and the same history recipe.
+    import importlib.util
+    script=__import__('pathlib').Path(__file__).resolve().parents[1]/'tools/encode_split_queries.py'
+    spec=importlib.util.spec_from_file_location('batch_encode',script)
+    batching=importlib.util.module_from_spec(spec);spec.loader.exec_module(batching)
+    import pandas as pd
+    profiles={'histories':np.array([[0,1,0],[0,0,0]]),'masks':np.array([[1,1,1],[0,0,0]],bool)}
+    rows=pd.DataFrame({'query':['query','query'],'profile_index':[0,1]})
+    batched=batching.encode_batch(encoder,rows,profiles)
+    np.testing.assert_allclose(batched[0],encoder.encode_query('query',['0','1','0']),atol=2e-6)
+    np.testing.assert_allclose(batched[1],encoder.encode_query('query',[]),atol=2e-6)
 
 
 @pytest.mark.parametrize('discovery', [False, True])
