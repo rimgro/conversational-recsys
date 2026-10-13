@@ -8,6 +8,8 @@
   item_vectors.npy, item_ids.npy           (n_tracks, dim) float32 и m4a_id по строкам
   query_vectors_<часть>.npz                query_id, vectors (float16); с --history-len — ..._h<L>.npz
   recall_<часть>.json                      recall@10/100/200 по всему каталогу, всего и по типам запросов
+  encode_parts/                            куски по 2000 запросов: оборвалось — та же команда продолжит с места;
+                                           не хватило памяти GPU — пачка уменьшается сама
 
 Части — recsys/data/parts.py: модель учится на index, векторы нужны для ranker_train, valid, test (и submit).
 Кандген twotower (recsys/candgen/dense.py) читает эти файлы: метрики в общем пайплайне —
@@ -16,6 +18,7 @@ python -m recsys candgen --sources +twotower --set candgen.sources.twotower.dir=
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +29,43 @@ import numpy as np
 from train_twotower import build_cfg
 from recsys.twotower.build import load_examples, load_trained
 from recsys.twotower.train import KS, device_precision, encode_examples, item_vectors, pick_device, recall_at
+
+
+CHUNK = 2000   # запросов в куске: каждый кусок сразу на диск, после обрыва считаются только недостающие
+
+
+def encode_resumable(model, ex, builder, device, precision, batch_size, history_len, parts_dir: Path, name: str):
+    """Векторы запросов кусками по CHUNK: готовые куски (parts_dir/<name>_<i>.npz с теми же query_id) берутся с
+    диска. Не хватило памяти GPU — пачка вдвое меньше, тот же кусок заново."""
+    import torch
+    parts_dir.mkdir(parents=True, exist_ok=True)
+    out, n_chunks, t0 = [], (len(ex) + CHUNK - 1) // CHUNK, time.time()
+    for i, start in enumerate(range(0, len(ex), CHUNK)):
+        part = ex.subset(np.arange(start, min(start + CHUNK, len(ex))))
+        path = parts_dir / f"{name}_{i:04d}.npz"
+        if path.exists():
+            with np.load(path) as z:
+                if z["query_id"].tolist() == part.query_id.astype(str).tolist():
+                    out.append(z["vectors"])
+                    continue
+        while True:
+            try:
+                u = encode_examples(model, part, builder, device, precision, batch_size, history_len=history_len)
+                break
+            except torch.OutOfMemoryError:
+                if batch_size <= 1:
+                    raise
+                batch_size //= 2
+                torch.cuda.empty_cache()
+                print(f"[encode] не хватило памяти GPU: пачка {batch_size}, кусок {i + 1} заново")
+        np.savez(path.with_suffix(".tmp.npz"), query_id=part.query_id.astype(str), vectors=u.astype(np.float16))
+        path.with_suffix(".tmp.npz").replace(path)
+        out.append(u.astype(np.float16))
+        done = min(start + CHUNK, len(ex))
+        rate = (time.time() - t0) / max(i + 1, 1)
+        print(f"[encode] {name}: {done}/{len(ex)} запросов (кусок {i + 1}/{n_chunks} сохранён), "
+              f"осталось ~{rate * (n_chunks - i - 1) / 60:.0f} мин")
+    return np.concatenate(out) if out else np.zeros((0, 0), dtype=np.float16), batch_size
 
 
 def main(argv=None) -> int:
@@ -58,14 +98,21 @@ def main(argv=None) -> int:
 
     suffix = f"_h{a.history_len}" if a.history_len is not None else ""
     for split in (a.parts.split(",") if a.parts else tcfg.get("encode", {}).get("parts", ["ranker_train", "valid", "test"])):
+        target_path = out / f"query_vectors_{split}{suffix}.npz"
         print(f"[encode] {split}: читаю запросы...")
         ex = load_examples(cfg, split, builder.spec, codes.sid, n_users=a.n_users)
-        u = encode_examples(model, ex, builder, device, precision, bs, history_len=a.history_len, log=print)
-        np.savez(out / f"query_vectors_{split}{suffix}.npz", query_id=ex.query_id.astype(str), vectors=u.astype(np.float16))
-        print(f"[encode] {split}: {u.shape} -> {out / f'query_vectors_{split}{suffix}.npz'}")
+        if target_path.exists():
+            with np.load(target_path) as z:
+                if z["query_id"].tolist() == ex.query_id.astype(str).tolist():
+                    print(f"[encode] {split}: уже посчитано ({target_path}), пропускаю")
+                    continue
+        u, bs = encode_resumable(model, ex, builder, device, precision, bs, a.history_len,
+                                 out / "encode_parts", f"{split}{suffix}")
+        np.savez(target_path, query_id=ex.query_id.astype(str), vectors=u.astype(np.float16))
+        print(f"[encode] {split}: {u.shape} -> {target_path}")
         has = ex.target >= 0
         if has.any():
-            r = recall_at(u[has], v, ex.target[has])
+            r = recall_at(u[has].astype(np.float32), v, ex.target[has])
             types = ex.query_type[has]
             res = {**{k: x for k, x in r.items() if k != "ranks"}, "n": int(has.sum()),
                    "by_type": {t: {f"recall@{k}": float((r["ranks"][types == t] <= k).mean()) for k in KS}

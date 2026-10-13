@@ -342,3 +342,32 @@ def test_v2_shortcut_raises_history_target():
     assert (s1 > s0).all()
     is_hist = (batch["item"] >= 0) & (batch["level"] == 0)
     assert is_hist.sum(1).tolist() == [3, 2]                                   # ключи — по одному на трек истории
+
+
+def test_encode_resumable_chunks(tmp_path, monkeypatch):
+    """Векторы запросов кусками: второй запуск берёт куски с диска; нехватка памяти — пачка меньше, кусок заново."""
+    import encode_twotower as enc
+    model = _model().eval()
+    ex = _examples()
+    b = SequenceBuilder(_spec(), "go", n_codes=4)
+    monkeypatch.setattr(enc, "CHUNK", 10)
+    u1, _ = enc.encode_resumable(model, ex, b, torch.device("cpu"), "fp32", 8, None, tmp_path, "valid")
+    files = sorted(p.name for p in tmp_path.iterdir())
+    assert len(files) == (len(ex) + 9) // 10 and u1.shape[0] == len(ex)
+    calls = []
+    monkeypatch.setattr(enc, "encode_examples", lambda *a, **k: calls.append(1))
+    u2, _ = enc.encode_resumable(model, ex, b, torch.device("cpu"), "fp32", 8, None, tmp_path, "valid")
+    assert not calls and np.array_equal(u1, u2)                 # всё с диска
+    (tmp_path / files[-1]).unlink()
+    real = encode_examples
+    fail = {"left": 1}
+
+    def flaky(m, e, bl, d, p, bs, **k):
+        if fail["left"]:
+            fail["left"] -= 1
+            raise torch.OutOfMemoryError("нет памяти")
+        return real(m, e, bl, d, p, bs, **k)
+
+    monkeypatch.setattr(enc, "encode_examples", flaky)
+    u3, bs = enc.encode_resumable(model, ex, b, torch.device("cpu"), "fp32", 8, None, tmp_path, "valid")
+    assert bs == 4 and np.allclose(u1.astype(np.float32), u3.astype(np.float32), atol=1e-3)
