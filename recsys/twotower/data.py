@@ -93,11 +93,17 @@ class Examples:
 
 
 def build_examples(tables: Dict[str, pd.DataFrame], pos: Dict[str, int], spec: TokenizerSpec,
-                   history_len: int = 64, max_query_tokens: int = 96) -> Examples:
-    """tables — users, queries, qrels части (build.load_examples); pos — m4a_id -> номер трека (SemanticIDs._pos)."""
+                   history_len: int = 64, max_query_tokens: int = 96,
+                   make_history: Optional[Callable[[pd.Series], np.ndarray]] = None) -> Examples:
+    """tables — users, queries, qrels части (build.load_examples); pos — m4a_id -> номер трека (SemanticIDs._pos).
+    make_history — строка пользователя -> история модели (arch: lazy — lazy.lazy_history); по умолчанию
+    последние history_len уникальных треков."""
     users = tables["users"]
     uidx = {u: i for i, u in enumerate(users["user_id"])}
-    histories = [recent_unique(list(h), pos, history_len) for h in users["history"]]
+    if make_history is not None:
+        histories = [make_history(row) for _, row in users.iterrows()]
+    else:
+        histories = [recent_unique(list(h), pos, history_len) for h in users["history"]]
     q = tables["queries"]
     q = q[q["user_id"].isin(uidx)].reset_index(drop=True)
     qrels = tables.get("qrels")

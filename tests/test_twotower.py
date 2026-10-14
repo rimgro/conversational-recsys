@@ -371,3 +371,26 @@ def test_encode_resumable_chunks(tmp_path, monkeypatch):
     monkeypatch.setattr(enc, "encode_examples", flaky)
     u3, bs = enc.encode_resumable(model, ex, b, torch.device("cpu"), "fp32", 8, None, tmp_path, "valid")
     assert bs == 4 and np.allclose(u1.astype(np.float32), u3.astype(np.float32), atol=1e-3)
+
+
+def test_encode_chunks_of_other_model_are_recomputed(tmp_path, monkeypatch):
+    """Модель переобучена в той же папке (другой штамп) — куски с диска не берутся."""
+    import encode_twotower as enc
+    model, ex = _model().eval(), _examples()
+    b = SequenceBuilder(_spec(), "go", n_codes=4)
+    monkeypatch.setattr(enc, "CHUNK", 10)
+    enc.encode_resumable(model, ex, b, torch.device("cpu"), "fp32", 8, None, tmp_path, "valid", "model.pt:1:1")
+    calls = []
+    real = encode_examples
+    monkeypatch.setattr(enc, "encode_examples", lambda *a, **k: calls.append(1) or real(*a, **k))
+    enc.encode_resumable(model, ex, b, torch.device("cpu"), "fp32", 8, None, tmp_path, "valid", "model.pt:1:1")
+    assert not calls
+    enc.encode_resumable(model, ex, b, torch.device("cpu"), "fp32", 8, None, tmp_path, "valid", "model.pt:2:2")
+    assert len(calls) == (len(ex) + 9) // 10
+
+
+def test_train_script_refuses_to_overwrite(tmp_path):
+    import train_twotower
+    (tmp_path / "model.pt").write_bytes(b"")
+    with pytest.raises(SystemExit, match="уже есть обученная модель"):
+        train_twotower.main(["--run-dir", str(tmp_path)])

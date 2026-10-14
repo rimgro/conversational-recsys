@@ -1,0 +1,27 @@
+# Lazy-кандген (recsys/twotower/lazy.py, docs/lazy.md). Поверх configs/default.yaml и configs/twotower.yaml:
+#   python scripts/encode_item_text.py                                   # один раз: векторы названий треков
+#   python scripts/train_twotower.py --config configs/lazy.yaml --run-dir artifacts/lazy/e0
+#   python scripts/train_twotower.py --config configs/lazy.yaml --set twotower.lazy.encoder_layers=4 --run-dir artifacts/lazy/e4
+#   python scripts/train_twotower.py --config configs/lazy.yaml --set twotower.lazy.mode=prompt --run-dir artifacts/lazy/prompt
+# Остальное (лосс, LoRA, теги, инструкция) — как в configs/twotower.yaml.
+
+twotower:
+  arch: lazy
+  lazy:
+    mode: encdec                 # encdec — энкодер истории, потом Qwen по запросу с cross-attention к нему |
+                                 # prompt — decoder-only бейзлайн: история в промпте Qwen перед запросом
+    encoder_layers: 0            # слоёв энкодера (копии первых слоёв Qwen); 0 — память = сами токены треков
+    cross_every: 1               # cross-attention перед каждым слоем Qwen (28 блоков); 4 — перед 0, 4, 8, ... (7)
+  item:
+    text:                        # «артист — название» трека: векторы Qwen3-Embedding, посчитанные заранее
+      enabled: true
+      path: artifacts/item_text/qwen3emb.npz
+  input:
+    history_len: 256             # треков истории, по одному токену на трек
+    history_order: decay         # decay — по сумме exp(-давность / decay_days) по прослушиваниям | recent — последние
+    decay_days: 180
+    instruction: "Given a user's listening history and a request, retrieve the music track the user wants"
+  train:
+    stages:                      # как в twotower.yaml + lr_copied — копии слоёв Qwen (энкодер, cross-attention)
+      - {name: A, epochs: 0.3, lora: false, lr: 1.0e-3, lr_copied: 1.0e-4}
+      - {name: B, epochs: 1.7, lora: true, lr: 5.0e-4, lr_lora: 2.0e-4, lr_copied: 1.0e-4}

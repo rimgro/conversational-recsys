@@ -105,6 +105,7 @@ Two-tower учится на всём train, поэтому в признаки �
 | `audio_seed` | MuQ: похожие на образец «like X by Y» (similar_to) | выкл |
 | `hnsw` | EmbeddingGemma-2: запрос против векторов треков индекса hnsw-v1 (векторы — `scripts/encode_hnsw.py`) | выкл |
 | `twotower` | двухбашенный: история (semantic ID) + запрос ([docs/twotower.md](docs/twotower.md)) | выкл |
+| `twotower` с `arch: lazy` | энкодер истории + Qwen по запросу с cross-attention ([docs/lazy.md](docs/lazy.md)); те же векторы и `dir` | выкл |
 
 Первые 11 — кандгены team1. Новый кандген в отбор попадает, только если у него есть вес в `selection.weights`: после
 включения — `python -m recsys tune-policy --sources +<имя> --run X`, затем `run` с `--config runs/X/selection.yaml`.

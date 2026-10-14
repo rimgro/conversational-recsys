@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -60,11 +61,41 @@ def load_examples(cfg: Dict[str, Any], part: str, spec: TokenizerSpec, sid: Sema
     qrels = ds.table(split, "qrels")
     tables = {"users": ds.users(split, queries["user_id"].unique()), "queries": queries,
               "qrels": qrels[qrels["query_id"].isin(set(queries["query_id"]))]}
-    return build_examples(tables, sid._pos, spec, icfg.get("history_len", 64), icfg.get("max_query_tokens", 96))
+    make_history = None
+    if cfg.get("twotower", {}).get("arch") == "lazy":   # по числу прослушиваний с затуханием, с корзинами
+        from recsys.twotower.lazy import lazy_history
+        cutoff, n = ds.cutoff(split), icfg.get("history_len", 256)
+        order, decay = icfg.get("history_order", "decay"), icfg.get("decay_days", 180.0)
+
+        def make_history(row):
+            return lazy_history(row["history"], row.get("history_ts"), sid._pos, n, cutoff, decay, order)
+    return build_examples(tables, sid._pos, spec, icfg.get("history_len", 64), icfg.get("max_query_tokens", 96),
+                          make_history=make_history)
 
 
-def make_builder(cfg: Dict[str, Any], spec: TokenizerSpec, n_codes: int) -> SequenceBuilder:
-    return SequenceBuilder(spec, cfg.get("twotower", {}).get("input", {}).get("instruction", ""), n_codes)
+def make_builder(cfg: Dict[str, Any], spec: TokenizerSpec, n_codes: int):
+    instruction = cfg.get("twotower", {}).get("input", {}).get("instruction", "")
+    if cfg.get("twotower", {}).get("arch") == "lazy":
+        from recsys.twotower.lazy import LazyBuilder
+        return LazyBuilder(spec, instruction)
+    return SequenceBuilder(spec, instruction, n_codes)
+
+
+def load_item_text(cfg: Dict[str, Any], codes: Codes) -> Optional[np.ndarray]:
+    """Векторы названий треков (arch: lazy, twotower.item.text; scripts/encode_item_text.py) в порядке строк кодов."""
+    t = cfg.get("twotower", {}).get("item", {}).get("text", {})
+    if not t.get("enabled", False):
+        return None
+    path = t.get("path", "artifacts/item_text/qwen3emb.npz")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{path}: нет векторов названий — python scripts/encode_item_text.py "
+                                f"(или --set twotower.item.text.enabled=false)")
+    with np.load(path) as z:
+        pos = {t: i for i, t in enumerate(z["ids"].astype(str))}
+        missing = [t for t in codes.sid.track_ids if t not in pos]
+        if missing:
+            raise ValueError(f"{path}: нет {len(missing)} треков (например, {missing[:3]}) — пересчитайте")
+        return z["vectors"][[pos[t] for t in codes.sid.track_ids]].astype(np.float32)
 
 
 def load_tags(cfg: Dict[str, Any], codes: Codes):
@@ -88,10 +119,10 @@ def new_model(cfg: Dict[str, Any], codes: Codes, base=None, log_q: Optional[np.n
     if groups is None and tcfg.get("loss", {}).get("mask_same_song", True):
         groups = song_groups(tracks_meta_path(cfg), codes.sid.track_ids)
     tags = None
-    if tcfg.get("arch", "v1") == "v2" and tcfg.get("tags", {}).get("enabled", True):
+    if tcfg.get("arch", "v1") in ("v2", "lazy") and tcfg.get("tags", {}).get("enabled", True):
         tags = load_tags(cfg, codes)
     model = build_model(tcfg, base, codes.codes, codes.vocab_sizes, codes.codebooks, song_groups=groups, log_q=log_q,
-                        tags=tags)
+                        tags=tags, item_text=load_item_text(cfg, codes) if tcfg.get("arch") == "lazy" else None)
     return model, (TokenizerSpec.from_hf(tok) if tok is not None else None)
 
 
@@ -121,6 +152,8 @@ class OnlineEncoder:
     @classmethod
     def load(cls, cfg: Dict[str, Any], checkpoint: str, device: Optional[torch.device] = None) -> "OnlineEncoder":
         model, builder, codes, tcfg = load_trained(cfg, checkpoint, device)
+        if tcfg.get("arch") == "lazy":   # Request.history — уже без повторов и времени каждого прослушивания
+            raise NotImplementedError("online: true для arch lazy не сделан: векторы запросов — encode_twotower.py")
         icfg = tcfg.get("input", {})
         precision = device_precision(next(model.parameters()).device, tcfg.get("model", {}).get("precision", "bf16"))
         return cls(model, builder, codes, icfg.get("history_len", 64), icfg.get("max_query_tokens", 96), precision)
