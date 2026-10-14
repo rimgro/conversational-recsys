@@ -52,8 +52,11 @@ class Resources:
 
     @cached_property
     def track_docs(self):
+        """Документы треков (candgen/text.py). data.track_docs — готовая таблица (папка инференса: на сервере
+        нет запросов train, из которых строится query_document)."""
         from recsys.candgen.text import TrackDocs
-        return TrackDocs.from_dataset(self.dataset)
+        path = self.cfg["data"].get("track_docs")
+        return TrackDocs.load(path) if path else TrackDocs.from_dataset(self.dataset)
 
     def text_index(self, name: str, spec: Optional[Dict[str, Any]] = None):
         """Текстовый индекс (candgen/text.py: bm25, tfidf, ...): кандгены и признаки ранкера пользуются одним."""

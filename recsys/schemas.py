@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import pandas as pd
 
@@ -42,6 +42,9 @@ class Request:
     target_ids: List[str] = field(default_factory=list)   # только для офлайн-оценки
     meta: Dict[str, Any] = field(default_factory=dict)    # только для метрик и разбора: query_type, is_new,
                                                           # exclude_*, цель; модель их не читает (кроме cutoff)
+    listens: Optional[Tuple[Sequence[str], Optional[Sequence[int]]]] = None   # сырые прослушивания: m4a_id и
+                                                          # время по порядку, с повторами (history, history_ts
+                                                          # датасета) — lazy-башне и башне Павла (online)
 
     @property
     def user_messages(self) -> List[str]:

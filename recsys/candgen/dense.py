@@ -12,8 +12,9 @@ ANN не нужен). Векторы считаются заранее на GPU 
             файлы — python scripts/encode_twotower.py. Учится только на части index (data/parts.py).
   twotower_lazy  lazy-башня (docs/lazy.md): те же файлы векторов, своя папка (artifacts/twotower/lazy_e0).
 
-Запроса нет в файлах (новая реплика в диалоге) — online: true кодирует его моделью (hnsw — EmbeddingGemma
-на CPU/GPU, twotower — Qwen + обученные веса, нужен torch); иначе для него пусто и предупреждение.
+Запроса нет в файлах (новая реплика в диалоге, онлайн-инференс — recsys/inference.py) — online: true кодирует
+его моделью (hnsw — EmbeddingGemma на CPU/GPU, twotower и twotower_lazy — Qwen + обученные веса, нужен torch);
+иначе для него пусто и предупреждение.
 """
 from __future__ import annotations
 
@@ -62,12 +63,15 @@ class _Dense(Candgen):
         """Модель для запросов, которых нет в файлах (online: true); грузится при первом таком запросе."""
         raise NotImplementedError
 
+    def warm(self) -> None:
+        if self.cfg.get("online") and self._encoder is None:
+            self._encoder = self.encoder()
+
     def query_vector(self, ctx: Context) -> Optional[np.ndarray]:
         row = self.query_row.get(str(ctx.request.request_id)) if ctx.request.request_id else None
         u = self.query_matrix[row].astype(np.float32) if row is not None else None
         if u is None and self.cfg.get("online"):
-            if self._encoder is None:
-                self._encoder = self.encoder()
+            self.warm()
             u = np.asarray(self._encoder.encode(self.encoder_input(ctx)), dtype=np.float32)
         return u
 
@@ -126,21 +130,26 @@ class HNSW(_Dense):
 
 @register("twotower", "dense")
 class TwoTower(_Dense):
-    """Двухбашенный: история (semantic ID) и запрос против вектора трека."""
+    """Двухбашенный: история (semantic ID) и запрос против вектора трека. online: true — model.pt из той же папки
+    (checkpoint), Qwen из чекпоинта, коды semantic_ids; device — cuda / cpu (по умолчанию cuda, если есть)."""
     how_to_build = "python scripts/encode_twotower.py --run-dir <папка>"
 
     def encoder(self):
+        import torch
         from recsys.twotower.build import OnlineEncoder
-        return OnlineEncoder.load(self.res.cfg, os.path.join(self.dir, self.cfg.get("checkpoint", "model.pt")))
+        # по умолчанию cuda, иначе cpu; не mps: на GPU Mac векторы запросов расходятся с посчитанными на cuda
+        # (косинус ~0.5 против 1.0000 на cpu, 14.10.2026)
+        device = torch.device(self.cfg.get("device") or ("cuda" if torch.cuda.is_available() else "cpu"))
+        return OnlineEncoder.load(self.res.cfg, os.path.join(self.dir, self.cfg.get("checkpoint", "model.pt")),
+                                  device=device, item_text=self.cfg.get("item_text"))
 
     def encoder_input(self, ctx: Context):
-        return ctx.request
+        return ctx
 
 
 @register("twotower_lazy", "dense")
 class TwoTowerLazy(TwoTower):
-    """Lazy-башня (docs/lazy.md): энкодер истории + Qwen по запросу с cross-attention; online нет."""
+    """Lazy-башня (docs/lazy.md): энкодер истории + Qwen по запросу с cross-attention. online: true — как у
+    twotower, плюс item_text — векторы названий треков (scripts/encode_item_text.py), если не по пути из чекпоинта;
+    история — сырые прослушивания запроса (Request.listens)."""
     how_to_build = "python scripts/encode_twotower.py --run-dir <папка с моделью arch: lazy>"
-
-    def encoder(self):
-        raise NotImplementedError("twotower_lazy: online нет — только готовые векторы запросов")

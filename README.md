@@ -54,6 +54,63 @@ python -m recsys run --set ranker.catboost.depth=8 --run depth8
 python -m recsys evaluate --set ranker.type=stub --run stub                       # без ранкера: порядок отбора
 ```
 
+## Онлайн-инференс (`recsys/inference.py`)
+
+Один запрос в формате датасета — строка `*_queries` и строка пользователя из `train` / `test_public` — проходит весь
+пайплайн прогона (разбор → 14 кандгенов → отбор → признаки → CatBoost → ответ) и возвращает `query_id`, `top20`,
+`response`. Всё грузится один раз при старте (~30 с без башен), запрос — один проход `Pipeline.run`.
+
+```bash
+# 1. собрать папку для сервера из прогона (что не нашлось — список в конце; повторный запуск докопирует)
+python -m recsys.inference export --run lazy3_best --out serving --with-qwen \
+  --model twotower=<v2/model.pt> --model twotower_lazy=<lazy_e0/model.pt> \
+  --model item_text=<item_text/qwen3emb.npz> --model twotower_pavel=<экспорт Павла step-104000>
+# 2. на сервере
+python -m recsys.inference serve --bundle serving --port 8000          # POST /recommend, GET /health
+python -m recsys.inference predict --bundle serving --queries q.parquet --users u.parquet --out answers.parquet
+python -m recsys.inference check --bundle serving --queries music4all_crs/test_public_queries.parquet \
+  --users music4all_crs/test_public.parquet --reference submission_test_public.parquet -n 200   # задержка, сверка
+python -m recsys.inference chat --bundle serving --history britpop    # консоль: история из examples/histories.yaml,
+                                                                       # запросы — с клавиатуры
+```
+
+```json
+POST /recommend
+{"query": {"query_id": "78ff70df6ca7c6df", "query": "90s british pop"},
+ "user":  {"user_id": 35511, "history": ["tkLb1MuW7uxdZ9CW", "..."], "history_ts": [1247864903, "..."],
+           "user_profile": "Listening since 2009; ...", "user_demographics": {"age": 21, "gender": "m", "country": "UK"},
+           "split": "test_public"}}
+-> {"query_id": "78ff70df6ca7c6df", "top20": ["...", "..."], "response": "I recommend ...", "timings": {"total": 0.08, "...": 0}}
+```
+
+`history` — все прослушивания по порядку, с повторами, как в датасете. Граница истории — по `split` (окно из
+`data.windows`, как при обучении), иначе `cutoff` (unix), иначе сразу после последнего прослушивания. `query_type`
+не нужен. Можно и списком запросов в одном POST.
+
+Папка `serving/` (из `lazy3_best`; без моделей башен ~0.6 ГБ):
+
+| что | откуда |
+|---|---|
+| `config.yaml`, `manifest.json` | конфиг прогона с путями внутри папки, башни `online: true`; что и откуда собрано |
+| `data/tracks_meta.parquet` | датасет (целиком: md5 файла — ключ кэшей каталога и индексов) |
+| `cache/catalog_*`, `cache/indexes/` | каталог и 5 текстовых индексов (собраны на части index) |
+| `track_docs.parquet` | документы треков с `query_document` — на сервере нет train, из которого он строится |
+| `ranker/` | CatBoost прогона (`model.cbm`, `features.json`) |
+| `semantic_ids/` | коды RQ-VAE (`artifacts/semantic_ids`) — для башен v2 и lazy |
+| `towers/twotower/`, `towers/twotower_lazy/` | `item_vectors.npy`, `item_ids.npy` + `model.pt` (с Drive, `twotower.ipynb` / `lazy.ipynb`) |
+| `towers/item_text/qwen3emb.npz` | векторы названий треков для lazy (`scripts/encode_item_text.py`) |
+| `towers/twotower_pavel/model/` | экспорт Павла (`config.json`, `tokenizer/`, `query_trainable.pt`, `history_features.npz`, `catalog.json`, `track_vectors.npy`) |
+| `hf/` (`--with-qwen`) | Qwen3-Embedding-0.6B, база всех трёх башен (2.3 ГБ); без него — скачается с Hugging Face |
+
+Сервер: `requirements.txt` + `torch`, `transformers>=4.51`, `peft`. Без башен пайплайн — ~22 мс на запрос (p50,
+p95 ~32 мс, CPU). Башни — три прохода Qwen3-0.6B: на CPU ~1.5 с на запрос, на GPU десятки мс — нужен GPU
+(`candgen.sources.<башня>.device`, по умолчанию cuda, если есть, иначе cpu; не mps: на GPU Mac векторы
+расходятся с посчитанными на cuda — косинус ~0.5, на cpu 1.0000). Сверка без моделей: `export --lookup` кладёт
+готовые векторы и списки запросов датасета вместо моделей — на `test_public` выдача и ответ совпадают с сабмитом
+`lazy3_best` на 100% запросов. С моделями совпадение будет неполным: другие точность (fp32 / bf16) и поиск
+(у Павла — HNSW), а для `similar_to` готовые списки Павла не содержат образца и его артиста — их убирали по qrels;
+онлайн этого знания нет.
+
 ## Отчёт: метрики по шагам
 
 `runs/<прогон>/<часть>/report.md` — на одних и тех же запросах:
@@ -164,6 +221,7 @@ recsys/
   __main__.py               точка запуска: python -m recsys <команда>
   run.py                    этапы прогона и отчёт; tune.py — подбор весов отбора
   pipeline.py               пайплайн: пачка запросов и одна реплика диалога (Pipeline.run -> Response)
+  inference.py              онлайн-инференс: папка для сервера (export), HTTP (serve), файлы (predict), check
   resources.py              общее для шагов: данные, индексы, разбор запроса, состояния пользователей
   data/                     dataset.py (данные по конфигу), parts.py (части без утечки), users.py (история на момент
                             запроса), crs.py (чтение файлов), catalog.py, history.py (профиль), synthetic.py

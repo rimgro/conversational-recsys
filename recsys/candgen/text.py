@@ -68,6 +68,15 @@ class TrackDocs:
     def get(self, kind: str) -> List[str]:
         return self.meta[DOCS[kind]].fillna("").astype(str).agg(" ".join, axis=1).tolist()
 
+    def save(self, path: str) -> None:
+        """Одна таблица (поля и query_document): на сервере нет запросов train, из которых она строится."""
+        self.meta.to_parquet(path, index=False)
+
+    @classmethod
+    def load(cls, path: str) -> "TrackDocs":
+        meta = pd.read_parquet(path)
+        return cls(meta.drop(columns="query_document"), meta["query_document"])
+
 
 def query_documents(dataset, track_ids: pd.Series) -> pd.Series:
     """Трек -> тексты запросов части index, где он цель (без повторов текста), через пробел; '' — нет таких."""

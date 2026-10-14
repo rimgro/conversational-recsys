@@ -5,6 +5,7 @@ data:
   source: crs                  # crs — Music4All-CRS (docs/dataset.md) | synthetic — без файлов, для тестов кода
   dir: music4all_crs           # tracks_meta, train, test_public, *_queries, *_qrels
   cache_dir: cache             # каталог, индексы, выдача кандгенов (всё пересобирается само при изменении)
+  track_docs: null             # готовые документы треков (папка инференса, recsys/inference.py); null — из данных
   max_tags: 20                 # теги Last.fm с наибольшим весом в каталоге
   windows:                     # начало окна позитивов = граница истории (docs/dataset.md)
     train: "2020-01-21"
@@ -48,7 +49,7 @@ candgen:
     # плотные (recsys/candgen/dense.py): векторы считаются заранее на GPU
     hnsw:              {enabled: false, dir: artifacts/hnsw, online: false}       # scripts/encode_hnsw.py
     twotower:          {enabled: false, dir: artifacts/twotower/v2, online: false, checkpoint: model.pt, features: false}
-    twotower_pavel:    {enabled: false, dir: artifacts/twotower_pavel, top_k: 200, features: false}   # готовые top-200
+    twotower_pavel:    {enabled: false, dir: artifacts/twotower_pavel, files: "*_top200.parquet", top_k: 200, features: false}   # готовые top-200
                                # (recsys/candgen/precomputed.py): train_top200.parquet, test_public_top200.parquet
     twotower_lazy:     {enabled: false, dir: artifacts/twotower/lazy_e0, features: false}   # lazy-башня (docs/lazy.md): векторы encode_twotower.py
   card_index:                  # карточка трека для card_bm25 и relisten (recsys/candgen/card.py)

@@ -48,6 +48,9 @@ class Candgen(ABC):
     def retrieve(self, batch: List[Context]) -> List[Cands]:
         """По Cands на каждый Context пачки, в том же порядке."""
 
+    def warm(self) -> None:
+        """Загрузить заранее то, что кандген берёт лениво (модели для online): перед первым запросом сервиса."""
+
     def cache_key(self) -> Dict[str, Any]:
         """Всё, от чего зависит выдача (кроме самих запросов): ключ кэша кандидатов (candgen/cache.py).
         Кандгены, обученные на части index, добавляют её описание."""

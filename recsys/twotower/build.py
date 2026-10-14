@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 import torch
 
+from recsys.config import deep_update
 from recsys.data.crs import split_path
 from recsys.data.dataset import Dataset
 from recsys.data.parts import PARTS, part_split
@@ -126,11 +127,16 @@ def new_model(cfg: Dict[str, Any], codes: Codes, base=None, log_q: Optional[np.n
     return model, (TokenizerSpec.from_hf(tok) if tok is not None else None)
 
 
-def load_trained(cfg: Dict[str, Any], checkpoint: str, device: Optional[torch.device] = None):
+def load_trained(cfg: Dict[str, Any], checkpoint: str, device: Optional[torch.device] = None,
+                 item_text: Optional[str] = None):
     """Обученная модель из model.pt: конфиг twotower берётся из чекпоинта.
+    item_text — путь к векторам названий (arch: lazy) вместо записанного в чекпоинте (другая папка на сервере).
     -> (модель, SequenceBuilder, Codes, раздел twotower из чекпоинта)."""
     ck = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    cfg = {**cfg, "twotower": ck["twotower"]}
+    tcfg = ck["twotower"]
+    if item_text:
+        tcfg = deep_update(tcfg, {"item": {"text": {"path": item_text}}})
+    cfg = {**cfg, "twotower": tcfg}
     codes = load_codes(cfg)
     device = device or pick_device()
     precision = device_precision(device, cfg["twotower"].get("model", {}).get("precision", "bf16"))
@@ -142,30 +148,50 @@ def load_trained(cfg: Dict[str, Any], checkpoint: str, device: Optional[torch.de
 
 
 class OnlineEncoder:
-    """Вектор u для нового запроса (реплика диалога): Request -> история + последняя реплика -> u."""
+    """Вектор u для нового запроса (реплика диалога, онлайн-инференс): история + последняя реплика -> u.
+    История — как при кодировании частей (load_examples): v1 / v2 — последние history_len уникальных треков
+    (Request.history), lazy — lazy_history по сырым прослушиваниям (Request.listens) до cutoff пользователя.
+    r всех треков (v2, lazy) от запроса не зависит: считается один раз при загрузке."""
 
-    def __init__(self, model: TwoTower, builder: SequenceBuilder, codes: Codes, history_len: int = 64,
-                 max_query_tokens: int = 96, precision: str = "bf16"):
-        self.model, self.builder, self.codes = model, builder, codes
-        self.history_len, self.max_query_tokens, self.precision = history_len, max_query_tokens, precision
+    def __init__(self, model: TwoTower, builder: SequenceBuilder, codes: Codes, tcfg: Dict[str, Any],
+                 precision: str = "bf16"):
+        self.model, self.builder, self.codes, self.tcfg, self.precision = model, builder, codes, tcfg, precision
+        self.device = next(model.parameters()).device
+        icfg = tcfg.get("input", {})
+        self.history_len, self.max_query_tokens = icfg.get("history_len", 64), icfg.get("max_query_tokens", 96)
+        self.parts = None
+        if hasattr(model, "track_parts"):   # как в encode_examples: без autocast (внутри — fp32)
+            with torch.no_grad():
+                self.parts = model.track_parts()
 
     @classmethod
-    def load(cls, cfg: Dict[str, Any], checkpoint: str, device: Optional[torch.device] = None) -> "OnlineEncoder":
-        model, builder, codes, tcfg = load_trained(cfg, checkpoint, device)
-        if tcfg.get("arch") == "lazy":   # Request.history — уже без повторов и времени каждого прослушивания
-            raise NotImplementedError("online: true для arch lazy не сделан: векторы запросов — encode_twotower.py")
-        icfg = tcfg.get("input", {})
+    def load(cls, cfg: Dict[str, Any], checkpoint: str, device: Optional[torch.device] = None,
+             item_text: Optional[str] = None) -> "OnlineEncoder":
+        model, builder, codes, tcfg = load_trained(cfg, checkpoint, device, item_text)
         precision = device_precision(next(model.parameters()).device, tcfg.get("model", {}).get("precision", "bf16"))
-        return cls(model, builder, codes, icfg.get("history_len", 64), icfg.get("max_query_tokens", 96), precision)
+        return cls(model, builder, codes, tcfg, precision)
+
+    def history(self, request, cutoff: Optional[int]) -> np.ndarray:
+        pos = self.codes.sid._pos
+        if self.tcfg.get("arch") == "lazy":
+            from recsys.twotower.lazy import lazy_history
+            if request.listens is None:
+                raise ValueError("arch lazy: нужны сырые прослушивания (Request.listens: history, history_ts)")
+            icfg = self.tcfg.get("input", {})
+            return lazy_history(request.listens[0], request.listens[1], pos, self.history_len, cutoff,
+                                icfg.get("decay_days", 180.0), icfg.get("history_order", "decay"))
+        chrono = [h.track_id for h in reversed(request.history)]   # Request.history — уникальные, свежие первыми
+        return recent_unique(chrono, pos, self.history_len)
 
     @torch.no_grad()
-    def encode(self, request) -> np.ndarray:
+    def encode(self, ctx) -> np.ndarray:
+        """ctx — recsys.schemas.Context: запрос и cutoff пользователя (ctx.user)."""
         from recsys.twotower.train import autocast, move
-        chrono = [h.track_id for h in reversed(request.history)]   # Request.history — уникальные, свежие первыми
-        hist = recent_unique(chrono, self.codes.sid._pos, self.history_len)
+        request = ctx.request
+        hist = self.history(request, ctx.user.cutoff if ctx.user is not None else request.meta.get("cutoff"))
         text = request.user_messages[-1] if request.user_messages else ""
         query = self.builder.spec.tokenize([" " + text])[0][:self.max_query_tokens]
-        device = next(self.model.parameters()).device
-        batch = move(self.builder.collate([(hist, query, -1)]), device)
-        with autocast(device, self.precision):
-            return self.model.encode_users(batch).float().cpu().numpy()[0]
+        batch = move(self.builder.collate([(hist, query, -1)]), self.device)
+        with autocast(self.device, self.precision):
+            u = self.model.encode_users(batch, self.parts) if self.parts is not None else self.model.encode_users(batch)
+            return u.float().cpu().numpy()[0]

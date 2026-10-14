@@ -1,0 +1,37 @@
+# Истории для python -m recsys.inference chat --history <имя>. Трек — «артист название» (достаточно части слов;
+# из подходящих берётся самый популярный) или m4a_id. Порядок — от старых к новым: последний слушали вчера.
+
+britpop:
+  - blur song 2
+  - oasis wonderwall
+  - radiohead creep
+  - pulp common people
+  - the verve bitter sweet symphony
+
+hiphop:
+  - eminem lose yourself
+  - dr dre still dre
+  - 50 cent in da club
+  - kendrick lamar humble
+  - kanye west stronger
+
+electronic:
+  - daft punk one more time
+  - the chemical brothers galvanize
+  - massive attack teardrop
+  - moby porcelain
+  - aphex twin xtal
+
+metal:
+  - metallica master of puppets
+  - iron maiden the trooper
+  - slayer raining blood
+  - system of a down chop suey
+  - tool sober
+
+indie_folk:
+  - bon iver the wolves
+  - fleet foxes white winter hymnal
+  - iron wine flightless bird
+  - sufjan stevens death with dignity
+  - the lumineers ho hey

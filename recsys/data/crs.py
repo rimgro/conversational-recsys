@@ -167,27 +167,37 @@ def build_requests(queries: pd.DataFrame, users: pd.DataFrame, qrels: Optional[p
             raise KeyError(f"нет пользователя {q.user_id} для запроса {q.query_id}")
         if q.user_id not in histories:
             histories[q.user_id] = aggregate_history(row.history, row.history_ts)
-        meta: Dict[str, Any] = {"split": str(q.split), "query_type": str(q.query_type),
-                                "source": str(getattr(q, "source", "")), "cutoff": cutoff}
-        targets: List[str] = []
+        req = make_request(q._asdict(), row._asdict(), cutoff, history=histories[q.user_id], keep_listens=False)
+        req.meta.update(split=str(q.split), query_type=str(q.query_type))
         ans = answers.get(q.query_id)
         if ans is not None:
             target = str(ans["target_m4a_id"])
-            targets = [target]
+            req.target_ids = [target]
             info = (catalog.row(target) if catalog is not None else None) or {}
-            meta.update(
+            req.meta.update(
                 is_new=bool(ans["is_new"]), ts=int(ans["ts"]),
                 exclude_ids=[] if _missing(ans["exclude_m4a_id"]) else [str(ans["exclude_m4a_id"])],
                 exclude_artist=None if _missing(ans["exclude_artist"]) else str(ans["exclude_artist"]),
                 artist=info.get("artist"), title=info.get("title"))
-        out.append(Request(
-            dialog=[Message("user", str(q.query))],
-            history=histories[q.user_id],
-            user_info=str(row.user_profile or ""),
-            user_attrs=parse_demographics(row.user_demographics),
-            user_id=str(q.user_id),
-            request_id=str(q.query_id),
-            target_ids=targets,
-            meta=meta,
-        ))
+        out.append(req)
     return out
+
+
+def make_request(query: Dict[str, Any], user: Dict[str, Any], cutoff: Optional[int] = None,
+                 history: Optional[List[HistoryItem]] = None, keep_listens: bool = True) -> Request:
+    """Строка *_queries (query_id, query, user_id) + строка сплита (history, history_ts, user_profile,
+    user_demographics) -> Request. Без ответов и query_type: их модель не видит (офлайн их добавляет
+    build_requests для метрик). history — уже агрегированная история (общая для запросов пользователя).
+    keep_listens=False — без сырых прослушиваний (Request.listens): офлайн башни берут готовые векторы, а
+    десятки миллионов строк всех пользователей части держать в памяти весь прогон незачем."""
+    listens = (user.get("history") if user.get("history") is not None else [], user.get("history_ts"))
+    return Request(
+        dialog=[Message("user", str(query.get("query") or ""))],
+        history=history if history is not None else aggregate_history(*listens),
+        user_info=str(user.get("user_profile") or ""),
+        user_attrs=parse_demographics(user.get("user_demographics")),
+        user_id=None if user.get("user_id") is None else str(user["user_id"]),
+        request_id=None if query.get("query_id") is None else str(query["query_id"]),
+        meta={"source": str(query.get("source") or ""), "cutoff": cutoff},
+        listens=listens if keep_listens else None,
+    )
