@@ -27,12 +27,13 @@ def deep_update(base: Dict[str, Any], upd: Optional[Dict[str, Any]], _path: str 
     """Рекурсивно накладывает upd на копию base.
 
     Ключ, которого нет в непустом разделе base, скорее всего опечатка: выдаём предупреждение
-    (значение всё равно записывается, чтобы можно было добавлять новые параметры).
+    (значение всё равно записывается, чтобы можно было добавлять новые параметры). Кроме selection.weights:
+    там ключи — имена кандгенов, и вес можно задать любому.
     """
     out = copy.deepcopy(base)
     for k, v in (upd or {}).items():
         key = f"{_path}.{k}" if _path else str(k)
-        if base and k not in base:
+        if base and k not in base and _path != "selection.weights":
             warnings.warn(f"config: ключа '{key}' нет в базовом конфиге (опечатка?)", stacklevel=2)
         if isinstance(v, dict) and isinstance(out.get(k), dict):
             out[k] = deep_update(out[k], v, key)

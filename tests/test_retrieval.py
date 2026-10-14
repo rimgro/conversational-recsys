@@ -112,9 +112,10 @@ def test_dense_reads_vectors(cfg, res, catalog, tmp_path):
     np.save(tmp_path / "item_vectors.npy", v)
     np.save(tmp_path / "item_ids.npy", ids)
     np.savez(tmp_path / "query_vectors_test.npz", query_id=np.array(["q1"]), vectors=v[[4]].astype(np.float16))
-    dense = REGISTRY["twotower"]({"top_k": 5, "dir": str(tmp_path)}, res)
-    got = dense.retrieve([_ctx(res, "x", request_id="q1")])[0]
-    assert got.ids[0] == 4 and len(got) == 5 and set(got.ids) <= set(range(30))   # треки без вектора не берём
+    for name in ("twotower_lazy", "twotower"):   # lazy-башня — те же файлы векторов
+        dense = REGISTRY[name]({"top_k": 5, "dir": str(tmp_path)}, res)
+        got = dense.retrieve([_ctx(res, "x", request_id="q1")])[0]
+        assert got.ids[0] == 4 and len(got) == 5 and set(got.ids) <= set(range(30))   # треки без вектора не берём
     with pytest.warns(UserWarning, match="нет вектора запроса"):
         assert len(dense.retrieve([_ctx(res, "x", request_id="нет")])[0]) == 0
     assert dense.n_missing == 1
@@ -152,3 +153,20 @@ def test_precomputed_lists(res, catalog, tmp_path):
     pc.check_coverage([_ctx(res, "x", request_id="q1")], "test")
     with pytest.raises(ValueError, match="нет списков для 1 из 2"):
         pc.check_coverage([_ctx(res, "x", request_id="q1"), _ctx(res, "x", request_id="q2")], "test")
+
+
+def test_best_config():
+    """configs/best.yaml: без предупреждений, все кандгены есть, голосуют только включённые, башни — признаки."""
+    import os
+    import warnings
+    from recsys.candgen import enabled_sources
+    from recsys.config import load_config
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        cfg = load_config([os.path.join(root, "configs", f) for f in ("default.yaml", "best.yaml")])
+    names = enabled_sources(cfg)
+    assert len(names) == 14 and set(names) <= set(REGISTRY)
+    voters = {n for n, w in cfg["selection"]["weights"].items() if w}
+    assert voters == {"bm25", "history", "twotower", "twotower_pavel", "twotower_lazy"} and voters <= set(names)
+    assert all(cfg["candgen"]["sources"][n].get("features", True) for n in names)

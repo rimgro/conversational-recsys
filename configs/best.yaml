@@ -1,0 +1,24 @@
+# Лучший прогон (lazy3_best, test nDCG@20 0.506, docs/experiments.md): все 14 кандгенов — 11 team1 и три башни.
+#   python -m recsys run --config configs/best.yaml --run best      # обучить ранкер, метрики на valid и test
+#   python -m recsys submit --config configs/best.yaml --run best   # сабмит test_public
+# Нужны готовые файлы башен: artifacts/twotower/v2 и artifacts/twotower/lazy_e0 (векторы запросов частей
+# ranker_train, valid, test, submit — scripts/encode_twotower.py), artifacts/twotower_pavel (*_top200.parquet).
+# Башни учились на всём train, но их ранги — признаки CatBoost: на test (его башни не видели) так лучше.
+
+candgen:
+  sources:
+    twotower:       {enabled: true, features: true}
+    twotower_pavel: {enabled: true, features: true}
+    twotower_lazy:  {enabled: true, features: true}
+
+selection:
+  # голосуют три башни, bm25 и history, сила голоса 1; остальные кандгены — только признаки ранкера.
+  # Веса руками, не tune-policy: на valid сила башен завышена (они учились и на нём)
+  weights: {bm25: 1, metadata_bm25: 0, tfidf: 0, query_tfidf: 0, metadata_char: 0, history: 1, history_recent: 0,
+            history_frequency: 0, favorite_artists: 0, audio_taste: 0, audio_recent: 0,
+            twotower: 1, twotower_pavel: 1, twotower_lazy: 1}
+  filters: [banned]            # для запросов о новом убрать прослушанное
+
+ranker:
+  catboost:
+    iterations: 1000           # early stopping по valid; у lazy3_best — 993 дерева

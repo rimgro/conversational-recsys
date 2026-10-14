@@ -6,7 +6,7 @@
 сабмит — `query_id`, `top20`, `response`.
 
 ```
-запрос -> разбор -> кандгены (каждый отдельно) -> отбор 150 (RRF по типу запроса) -> признаки -> CatBoost -> ответ
+запрос -> разбор -> кандгены (каждый отдельно) -> отбор 150 (взвешенный RRF) -> признаки -> CatBoost -> ответ
 ```
 
 Один и тот же код считает метрики, обучает ранкер, делает сабмит и отвечает на реплику диалога (`Pipeline.run`).
@@ -22,6 +22,10 @@ pytest -q                                   # тесты: весь пайпла�
 
 python -m recsys run                        # обучить ранкер и посчитать метрики на valid и test -> runs/baseline/
 python -m recsys submit                     # сабмит по всему test_public -> runs/baseline/submission_test_public.parquet
+
+# лучший прогон (test nDCG@20 0.506): все 11 кандгенов team1 + три башни; нужны файлы башен в artifacts/ (ниже)
+python -m recsys run --config configs/best.yaml --run best
+python -m recsys submit --config configs/best.yaml --run best
 ```
 
 В Google Colab — `pipeline.ipynb`: те же шаги ячейками, всё сохраняется на Drive, ответы на test_public и на
@@ -80,7 +84,9 @@ python -m recsys evaluate --set ranker.type=stub --run stub                     
 | `submit` | test_public, все | сабмит |
 
 Перефразировки одного текста всегда в одной части; пересечение частей проверяется при загрузке.
-Two-tower учится на всём train, поэтому в признаки ранкера не идёт (`candgen.sources.twotower.features: false`).
+Башни (`twotower`, `twotower_pavel`, `twotower_lazy`) учились на всём train, поэтому по умолчанию в признаки ранкера не
+идут (`features: false`). В лучшем прогоне ([configs/best.yaml](configs/best.yaml)) идут: test башни не видели, и на нём
+так лучше (+0.03–0.04 nDCG@20, [docs/experiments.md](docs/experiments.md)); valid при этом завышен.
 
 ## Конфиг ([configs/default.yaml](configs/default.yaml))
 
@@ -105,7 +111,8 @@ Two-tower учится на всём train, поэтому в признаки �
 | `audio_seed` | MuQ: похожие на образец «like X by Y» (similar_to) | выкл |
 | `hnsw` | EmbeddingGemma-2: запрос против векторов треков индекса hnsw-v1 (векторы — `scripts/encode_hnsw.py`) | выкл |
 | `twotower` | двухбашенный: история (semantic ID) + запрос ([docs/twotower.md](docs/twotower.md)) | выкл |
-| `twotower` с `arch: lazy` | энкодер истории + Qwen по запросу с cross-attention ([docs/lazy.md](docs/lazy.md)); те же векторы и `dir` | выкл |
+| `twotower_lazy` | lazy-башня: энкодер истории + Qwen по запросу с cross-attention ([docs/lazy.md](docs/lazy.md)); векторы те же, что у `twotower`, папка `artifacts/twotower/lazy_e0` | выкл |
+| `twotower_pavel` | Qwen history-aware two-tower (ветка codex/qwen-history-candgen): готовые top-200 по query_id (`recsys/candgen/precomputed.py`) | выкл |
 
 Первые 11 — кандгены team1. Новый кандген в отбор попадает, только если у него есть вес в `selection.weights`: после
 включения — `python -m recsys tune-policy --sources +<имя> --run X`, затем `run` с `--config runs/X/selection.yaml`.
@@ -130,8 +137,20 @@ python -m recsys tune-policy --sources +twotower --run tt                    # �
 python -m recsys run --sources +twotower --config runs/tt/selection.yaml --run tt
 ```
 
-Обучение и векторы — `twotower.ipynb` в Colab. Two-tower учится на всём train, поэтому его скоры в признаки
-CatBoost не идут (`features: false`): он только помогает отобрать 150 кандидатов. Нет векторов для запросов части —
+Файлы трёх башен для [configs/best.yaml](configs/best.yaml):
+
+| кандген | папка | что там | откуда |
+|---|---|---|---|
+| `twotower` | `artifacts/twotower/v2` | `item_vectors.npy`, `item_ids.npy`, `query_vectors_*.npz` | `twotower.ipynb` / `encode_twotower.py` |
+| `twotower_lazy` | `artifacts/twotower/lazy_e0` | то же | `lazy.ipynb` / `encode_twotower.py` |
+| `twotower_pavel` | `artifacts/twotower_pavel` | `train_top200.parquet`, `test_public_top200.parquet` | считаются вне репозитория |
+
+Векторы запросов нужны для частей ranker_train, valid, test и submit (или файлы по сплитам: train, test_public).
+Другой тестовый сплит (test_private): векторы его запросов — `encode_twotower.py --parts submit --set
+data.parts.test_split=test_private` для обеих векторных башен; готовых списков `twotower_pavel` для него нет, пока
+их не посчитают вне репозитория (без них прогон остановится; ранкер обучен с этой башней, поэтому выключить её нельзя).
+
+Обучение и векторы — `twotower.ipynb` (`lazy.ipynb`) в Colab. Нет векторов для запросов части —
 прогон останавливается с подсказкой, а не идёт молча без него.
 
 Сервис HNSW пайплайн не вызывает (ищем по тем же векторам локально); `online: true` — новые реплики диалога
@@ -140,7 +159,7 @@ CatBoost не идут (`features: false`): он только помогает �
 ## Структура
 
 ```
-configs/default.yaml        все параметры; twotower.yaml, gemma.yaml — поверх default
+configs/default.yaml        все параметры; best.yaml (лучший прогон), twotower.yaml, lazy.yaml, gemma.yaml — поверх default
 recsys/
   __main__.py               точка запуска: python -m recsys <команда>
   run.py                    этапы прогона и отчёт; tune.py — подбор весов отбора
