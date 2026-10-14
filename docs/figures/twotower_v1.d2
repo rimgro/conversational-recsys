@@ -1,0 +1,61 @@
+# Two-tower v1 (twotower.arch: v1, первая модель). Описание: docs/arch/twotower_v2.md, раздел v1.
+# Сборка: make -C docs/figures
+
+...@style
+
+grid-columns: 1
+grid-gap: 60
+
+score: "скор = u · v / τ  →  softmax по 64 016 трекам" {class: output}
+
+towers: {
+  class: row
+  grid-columns: 2
+  grid-gap: 80
+
+  user: "Башня пользователя" {
+    class: tower
+    direction: up
+    qwen: "Qwen3-Embedding-0.6B\n28 слоёв, hidden 1024" {class: lora}
+    head: "u = L2(Linear 1024→256 (h_EOS))" {class: trainable}
+    qwen -> head: "h_EOS [1024]"
+  }
+
+  item: "Башня трека" {
+    class: tower
+    direction: up
+    sum: "сумма 4 строк [32]\n(на старте = ẑ RQ-VAE)" {class: trainable}
+    mlp: "MLP 32→256→256 → L2 = v" {class: trainable}
+    sum -> mlp
+  }
+}
+
+embs: {
+  class: row
+  grid-columns: 3
+  grid-gap: 50
+  txt: "эмбеддер текста Qwen" {class: frozen}
+  E: "таблица кодов входа\n777 × 1024\n(старт: P·центроид)" {class: emb}
+  E2: "своя таблица кодов\n777 × 32\n(старт: центроиды)" {class: emb}
+}
+
+inputs: {
+  class: row
+  grid-columns: 3
+  grid-gap: 60
+  query: "Instruct … Request: <запрос> <EOS>" {class: input}
+  hist: "история: 64 трека × 4 токена кода" {class: input}
+  track: "трек-кандидат: 4 кода" {class: input}
+}
+
+inputs.query -> embs.txt
+inputs.hist -> embs.E
+inputs.track -> embs.E2
+embs.txt -> towers.user.qwen
+embs.E -> towers.user.qwen: "токены треков"
+embs.E2 -> towers.item.sum
+
+towers.user.head -> score: "u [256]"
+towers.item.mlp -> score: "v [256]"
+
+legend: @legend

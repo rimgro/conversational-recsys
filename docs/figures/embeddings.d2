@@ -1,0 +1,39 @@
+# Откуда берутся эмбеддинги трека. Описание: docs/arch/embeddings.md
+# Сборка: make -C docs/figures
+# Три ряда (источника) слева направо: сырьё → заранее посчитанное → обучаемое в two-tower.
+
+...@style
+
+direction: right
+
+muq: "MuQ аудио-эмбеддинг\n[128]" {class: input}
+rq: "RQ-VAE (заранее, заморожен)" {
+  class: group
+  direction: right
+  enc: "энкодер\n128→128→32→32 = z" {class: frozen}
+  q1: "уровень 1\nближайший из 256 → c₁" {class: frozen}
+  q2: "уровень 2 (остаток)\n→ c₂" {class: frozen}
+  q3: "уровень 3 (остаток)\n→ c₃" {class: frozen}
+  enc -> q1 -> q2 -> q3
+}
+codes: "код трека\n(c₁, c₂, c₃, c₄)\nc₄ — номер при коллизии" {class: output}
+codetab: "таблица кодов\nстарт — центроиды RQ-VAE\nv1/v2 вход: P·центроид + Δ + level [1024]\nlazy: 4 × 32 склейка" {class: emb}
+
+tags: "теги Last.fm (вес/100)\n+ жанры (0.5)\nтоп-32, сумма весов = 1" {class: input}
+tagtab: "таблица тегов ~12.5k × 256\nΣ w_i · T[тег_i]" {class: emb}
+
+title: "«артист — название»" {class: input}
+qwen: "Qwen3-Embedding-0.6B\nEOS → L2 [1024]\n(заранее)" {class: frozen}
+tproj: "Linear 1024→256 → LN\n(только lazy)" {class: trainable}
+
+tower: "башня трека → r_j, v_j\n(обучение end-to-end\nот softmax по каталогу)" {class: tower}
+
+muq -> rq.enc
+rq.q3 -> codes
+codes -> codetab
+codetab -> tower
+tags -> tagtab -> tower
+title -> qwen -> tproj -> tower
+
+legend: @legend
+legend.near: bottom-center
