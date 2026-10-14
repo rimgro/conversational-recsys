@@ -81,7 +81,7 @@ def score(pipe: Pipeline, part: str, results: List[Result]) -> None:
         for r, a, b in zip(block, np.cumsum([0] + n[:-1]), np.cumsum(n)):
             if b > a:
                 r.scores = scores[a:b]
-                r.top = pipe.order(r.ctx, r.selection, r.scores)
+                r.top = pipe.order(r.ctx, r.selection, r.scores, ranked=True)
 
 
 # ---------------------------------------------------------------- отчёт

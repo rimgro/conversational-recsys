@@ -127,3 +127,19 @@ def test_features_parallel_equal_serial(cfg, res, tmp_path, monkeypatch):
     p1 = run.feature_block_path(Pipeline(deep_update(cfg, {"features": {"workers": 1}}), res, load_model=False), "valid", chunk[:7])
     p2 = run.feature_block_path(Pipeline(deep_update(cfg, {"features": {"workers": 8}}), res, load_model=False), "valid", chunk[:7])
     assert os.path.basename(p1) == os.path.basename(p2)
+
+
+def test_discovery_bonus(cfg, res, requests):
+    """ranker.discovery: треки не из истории поднимаются, первые keep_top мест ранкера на месте; без бонуса — как было."""
+    req = next(r for r in requests if len(r.history) >= 5)
+    ctx = res.context(req)
+    hist = res.catalog.positions(h.track_id for h in req.history)
+    plain = Pipeline(cfg, res)
+    sel = plain.selector.select(ctx, {n: c[0] for n, c in plain.retrieve([ctx]).items()})
+    scores = np.where(np.isin(sel.ids, hist), 2.0, 1.0) + np.linspace(0, 0.01, len(sel.ids))  # история выше
+    base = plain.order(ctx, sel, scores, ranked=True)
+    assert (base == plain.order(ctx, sel, scores)).all() and np.isin(base[:3], hist).all()
+    boosted = Pipeline(deep_update(cfg, {"ranker": {"discovery": {"bonus": 100, "keep_top": 2}}}), res)
+    top = boosted.order(ctx, sel, scores, ranked=True)
+    assert (top[:2] == base[:2]).all() and not np.isin(top[2:], hist).any()
+    assert (boosted.order(ctx, sel, scores) == base).all()   # не скоры ранкера (порядок отбора) — без бонуса

@@ -83,6 +83,9 @@ ranker:
   model_dir: null              # папка модели; null — runs/<run.name>/ranker
   top_k: 20                    # длина выдачи: метрика датасета — nDCG@20
   threads: 6
+  discovery:                   # бонус за новизну после ранкера: скор + bonus · σ(скоров запроса) треку не из истории;
+    bonus: 0                   # первые keep_top мест ранкера не трогаем. 0 — выключен; для best_1000_new лучше всего на test bonus 2, keep_top 3
+    keep_top: 3
   catboost:
     loss_function: YetiRank
     eval_metric: "NDCG:top=20"

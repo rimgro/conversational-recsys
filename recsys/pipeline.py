@@ -51,6 +51,9 @@ class Pipeline:
         self.features = FeatureBuilder(cfg, self.res, self.sources)
         self.ranker = ranker if ranker is not None else (load_ranker(cfg) if load_model else None)
         self.top_k = int(cfg["ranker"].get("top_k", 20))
+        disc = cfg["ranker"].get("discovery") or {}
+        self.discovery_bonus = float(disc.get("bonus", 0.0))
+        self.discovery_keep = int(disc.get("keep_top", 3))
         self._explainer = None
 
     @property
@@ -89,12 +92,22 @@ class Pipeline:
             return Result(ctx, lists, sel, np.zeros(0), np.zeros(0, dtype=np.int32))
         frame = self.features.build(ctx, lists, sel)
         scores = np.asarray(self.ranker.score(frame), dtype=np.float64)
-        return Result(ctx, lists, sel, scores, self.order(ctx, sel, scores), frame if keep_features else None)
+        return Result(ctx, lists, sel, scores, self.order(ctx, sel, scores, ranked=True),
+                      frame if keep_features else None)
 
-    def order(self, ctx: Context, sel: Selection, scores: np.ndarray) -> np.ndarray:
+    def order(self, ctx: Context, sel: Selection, scores: np.ndarray, ranked: bool = False) -> np.ndarray:
         """Позиции по убыванию скора (при равенстве — меньшая позиция), первые top_k. Уже показанное и
-        скипнутое в диалоге не повторяем (в датасете таких нет)."""
-        ids = sel.ids[np.lexsort((sel.ids, -scores))]
+        скипнутое в диалоге не повторяем (в датасете таких нет).
+
+        ranked — скоры ранкера: с ranker.discovery.bonus = λ > 0 треки не из истории поднимаются, скор + λ · σ(скоров
+        запроса); первые keep_top мест ранкера не трогаем (docs/experiments.md, «Бонус за новизну»)."""
+        order = np.lexsort((sel.ids, -scores))
+        if ranked and self.discovery_bonus > 0 and len(order) > self.discovery_keep:
+            new = ~np.isin(sel.ids, self.catalog.positions(h.track_id for h in ctx.request.history))
+            boosted = scores + self.discovery_bonus * (scores.std() or 1.0) * new
+            rest = order[self.discovery_keep:]
+            order = np.concatenate([order[:self.discovery_keep], rest[np.lexsort((sel.ids[rest], -boosted[rest]))]])
+        ids = sel.ids[order]
         seen = ctx.request.shown_ids + ctx.request.skipped_ids
         if seen:
             ids = ids[~np.isin(ids, self.catalog.positions(seen))]

@@ -84,3 +84,18 @@ python -m recsys submit --run two_fix_pfeat --sources +twotower,+twotower_pavel 
   --set candgen.sources.twotower.features=true --set candgen.sources.twotower_pavel.features=true
 ```
 Нужны `artifacts/twotower/v2/` (векторы частей ranker_train, valid, test и test_public) и `artifacts/twotower_pavel/`.
+
+## Бонус за новизну (14.10.2026, best_1000_new)
+
+После CatBoost трекам не из истории добавляется `λ · σ(скоров запроса)`, первые `keep_top` мест ранкера не
+трогаем (`ranker.discovery: {bonus: λ, keep_top}`, по умолчанию выключен). Метрики платформы на test (среднее по
+13 типам), Fast = (0.35·Ranking + 0.15·nDCG new + 0.05·Discovery + 0.10·Diversity) / 0.65:
+
+| вариант | Ranking | nDCG new | Discovery | Diversity | Fast |
+|---|---|---|---|---|---|
+| без бонуса | 0.503 | 0.378 | 0.367 | 0.974 | 0.536 |
+| keep_top 3, λ 1 | 0.497 | 0.394 | 0.524 | 0.974 | 0.549 |
+| keep_top 3, λ 2 | 0.482 | 0.402 | 0.697 | 0.978 | 0.556 |
+
+С keep_top 3 после λ ≈ 2 Fast выходит на плато; без защиты верха (keep_top 0) после λ ≈ 1.25 Ranking обваливается.
+λ подобран на test — для другой модели (lazy3_best) кривую надо пересчитать.
