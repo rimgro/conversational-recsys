@@ -99,3 +99,40 @@ python -m recsys submit --run two_fix_pfeat --sources +twotower,+twotower_pavel 
 
 С keep_top 3 после λ ≈ 2 Fast выходит на плато; без защиты верха (keep_top 0) после λ ≈ 1.25 Ranking обваливается.
 λ подобран на test — для другой модели (lazy3_best) кривую надо пересчитать.
+
+## Lazy-башня (14.10.2026)
+
+Третья башня — lazy, `encoder_layers = 0` (`docs/lazy.md`, `artifacts/twotower/lazy_e0`, кандген `twotower_lazy`):
+Qwen по тексту запроса с cross-attention к 256 трекам истории, трек — коды + теги + название. Учится на всём train,
+как v2 и башня Павла, поэтому решения — только по test.
+
+Башни без ранкера (test, 10k):
+
+| башня | recall@150 | recall@200 | recall@1000 | nDCG@20 списка |
+|---|---|---|---|---|
+| `twotower` (v2) | 0.643 | 0.676 | 0.847 | 0.207 |
+| **`twotower_lazy`** | **0.716** | **0.748** | **0.894** | **0.287** |
+| `twotower_pavel` | 0.722 | 0.752 | — (200) | 0.298 |
+
+Lazy лучше v2 на всех типах; сильнее всего на exact (0.27 → 0.70, название трека в башне треков), слабее Павла на
+lyrics (нет текста песни).
+
+Пайплайн — рецепт `best_1000_new` (голосуют с силой 1 башни, `bm25`, `history`; ранги башен в признаках; 1000
+деревьев; фильтр `banned`), 95% интервал разницы по запросам test:
+
+| прогон | башни | цель в 150 | **nDCG@20 test** | hit@20 | разница с `best_1000_new` |
+|---|---|---|---|---|---|
+| `best_1000_new` | v2 + Павел | 0.833 | 0.495 | 0.680 | — |
+| `lazy_best` | lazy + Павел | 0.841 | 0.503 | 0.689 | +0.0085 [+0.006, +0.011] |
+| **`lazy3_best`** | **v2 + lazy + Павел** | **0.845** | **0.506** | **0.693** | **+0.0117 [+0.010, +0.014]** |
+
+Рост на complex (+0.023), novelty, genre, mood, negative_constraint, era_region (+0.012–0.015); lyrics_recall,
+audio_attributes, situation — без изменений. Сабмит: `runs/lazy3_best/submission_test_public.parquet`.
+
+```bash
+python -m recsys run --run lazy3_best --sources +twotower,+twotower_lazy,+twotower_pavel \
+  --config configs/selection_two_towers.yaml --set ranker.catboost.iterations=1000 --set 'selection.filters=[banned]' \
+  --set selection.weights.twotower_lazy=1 --set candgen.sources.twotower.features=true \
+  --set candgen.sources.twotower_pavel.features=true --set candgen.sources.twotower_lazy.features=true
+# submit — та же команда с submit вместо run
+```

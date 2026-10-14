@@ -50,6 +50,7 @@ candgen:
     twotower:          {enabled: false, dir: artifacts/twotower/v2, online: false, checkpoint: model.pt, features: false}
     twotower_pavel:    {enabled: false, dir: artifacts/twotower_pavel, top_k: 200, features: false}   # готовые top-200
                                # (recsys/candgen/precomputed.py): train_top200.parquet, test_public_top200.parquet
+    twotower_lazy:     {enabled: false, dir: artifacts/twotower/lazy_e0, features: false}   # lazy-башня (dev/lazy): векторы encode_twotower.py
   card_index:                  # карточка трека для card_bm25 и relisten (recsys/candgen/card.py)
     k1: 1.2
     b: 0.75
