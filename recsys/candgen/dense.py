@@ -10,7 +10,7 @@ ANN не нужен). Векторы считаются заранее на GPU 
             файлы — python scripts/encode_hnsw.py. Модель предобучена, на наших запросах не учится — утечки нет.
   twotower  двухбашенный (recsys/twotower/, docs/twotower.md): история + запрос против трека;
             файлы — python scripts/encode_twotower.py. Учится только на части index (data/parts.py).
-  twotower_lazy  lazy-башня (ветка dev/lazy): те же файлы векторов, своя папка (artifacts/twotower/lazy_e0).
+  twotower_lazy  lazy-башня (docs/lazy.md): те же файлы векторов, своя папка (artifacts/twotower/lazy_e0).
 
 Запроса нет в файлах (новая реплика в диалоге) — online: true кодирует его моделью (hnsw — EmbeddingGemma
 на CPU/GPU, twotower — Qwen + обученные веса, нужен torch); иначе для него пусто и предупреждение.
@@ -139,9 +139,8 @@ class TwoTower(_Dense):
 
 @register("twotower_lazy", "dense")
 class TwoTowerLazy(TwoTower):
-    """Lazy-башня (ветка dev/lazy, docs/lazy.md там): энкодер истории + Qwen по запросу с cross-attention. Файлы —
-    encode_twotower.py из dev/lazy; online нет."""
-    how_to_build = "python scripts/encode_twotower.py --run-dir <папка> (ветка dev/lazy)"
+    """Lazy-башня (docs/lazy.md): энкодер истории + Qwen по запросу с cross-attention; online нет."""
+    how_to_build = "python scripts/encode_twotower.py --run-dir <папка с моделью arch: lazy>"
 
     def encoder(self):
         raise NotImplementedError("twotower_lazy: online нет — только готовые векторы запросов")
