@@ -76,6 +76,7 @@ tune:                          # подбор весов отбора на valid
 
 features:                      # признаки ранкера (recsys/features.py), группы по порядку
   groups: [text, history, item, rrf, sources, selection]   # + summary — признаки разбора запроса
+  workers: auto                # процессов для блоков признаков: auto — ядер минус одно (до 8); 1 — без процессов
 
 ranker:
   type: catboost               # catboost (обучается: python -m recsys train) | stub (порядок отбора)

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing as mp
 import os
 import time
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -192,38 +193,77 @@ def feature_block_path(pipe: Pipeline, part: str, results: List[Result]) -> Opti
         return None
     deps = {"queries": [str(r.ctx.request.request_id) for r in results], "data": pipe.res.dataset.source_key,
             "candgens": [c.cache_key() for c in pipe.candgens], "selection": pipe.cfg["selection"],
-            "features": pipe.cfg["features"], "v": FEATURES_VERSION}
+            "features": {k: v for k, v in pipe.cfg["features"].items() if k != "workers"},   # число процессов
+            "v": FEATURES_VERSION}                                                              # на признаки не влияет
     key = hashlib.md5(json.dumps(deps, sort_keys=True, default=str).encode()).hexdigest()[:16]
     return os.path.join(cache_dir, "features", part.split("/")[0], f"{key}.parquet")
 
 
+def _block_frame(pipe: Pipeline, block: List[Result]) -> pd.DataFrame:
+    """Признаки всех запросов блока одной таблицей; _query — номер запроса в блоке."""
+    parts = []
+    for i, r in enumerate(block):
+        f = pipe.features.build(r.ctx, r.lists, r.selection) if len(r.selection.ids) else pd.DataFrame()
+        parts.append(f.assign(_query=np.int32(i)) if len(f) else f)
+    if not any(len(f) for f in parts):
+        return pd.DataFrame({"_query": np.zeros(0, np.int32)})
+    return pd.concat([f for f in parts if len(f)], ignore_index=True)
+
+
+def _save(x: pd.DataFrame, path: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    x.to_parquet(path + ".tmp", index=False)
+    os.replace(path + ".tmp", path)
+
+
+_FORKED: Dict[str, Any] = {}   # пайплайн и блоки для процессов-копий: fork копирует память, ничего не пересылается
+
+
+def _compute_block(i: int) -> int:
+    pipe, blocks, paths = _FORKED["pipe"], _FORKED["blocks"], _FORKED["paths"]
+    _save(_block_frame(pipe, blocks[i]), paths[i])
+    return i
+
+
+def feature_workers(cfg: Dict[str, Any], n_blocks: int) -> int:
+    """features.workers: auto — ядер минус одно (не больше 8); 1 — без процессов."""
+    w = cfg.get("features", {}).get("workers", "auto")
+    w = min(max((os.cpu_count() or 2) - 1, 1), 8) if w in (None, "auto") else int(w)
+    return max(1, min(w, n_blocks))
+
+
 def features_for(pipe: Pipeline, part: str, results: List[Result]) -> Iterator[Tuple[List[pd.DataFrame], List[Result]]]:
     """Признаки отобранных кандидатов каждого запроса (строки — в порядке selection.ids), блоками по
-    FEATURE_BLOCK запросов: блок с диска, если он уже посчитан с теми же кандгенами, отбором и признаками."""
-    for start in range(0, len(results), FEATURE_BLOCK):
-        block = results[start:start + FEATURE_BLOCK]
-        path = feature_block_path(pipe, part, block)
+    FEATURE_BLOCK запросов: блок с диска, если он уже посчитан с теми же кандгенами, отбором и признаками.
+    Недостающие блоки считаются параллельно (features.workers процессов) и сразу пишутся в кэш."""
+    blocks = [results[s:s + FEATURE_BLOCK] for s in range(0, len(results), FEATURE_BLOCK)]
+    paths = [feature_block_path(pipe, part, b) for b in blocks]
+    todo = [i for i, p in enumerate(paths) if p and not os.path.exists(p)]
+    workers = feature_workers(pipe.cfg, len(todo))
+    if workers > 1 and "fork" in mp.get_all_start_methods():
+        pipe.features.warm()                        # тексты треков и индексы — один раз, до копирования процессов
+        _FORKED.update(pipe=pipe, blocks=blocks, paths=paths)
+        t0 = time.time()
+        try:
+            with mp.get_context("fork").Pool(workers) as pool:
+                for n, _ in enumerate(pool.imap_unordered(_compute_block, todo), start=1):
+                    pipe.res.log(f"{part}: признаки блок {n}/{len(todo)} ({workers} процессов) за {time.time() - t0:.0f} c")
+        finally:
+            _FORKED.clear()
+    done = 0
+    for block, path in zip(blocks, paths):
         t0 = time.time()
         if path and os.path.exists(path):
-            x = pd.read_parquet(path)
-            how = "с диска"
+            x, how = pd.read_parquet(path), "с диска"
         else:
-            parts = []
-            for i, r in enumerate(block):
-                f = pipe.features.build(r.ctx, r.lists, r.selection) if len(r.selection.ids) else pd.DataFrame()
-                parts.append(f.assign(_query=np.int32(i)) if len(f) else f)
-            x = pd.concat([f for f in parts if len(f)], ignore_index=True) if any(len(f) for f in parts) \
-                else pd.DataFrame({"_query": np.zeros(0, np.int32)})
+            x, how = _block_frame(pipe, block), "посчитаны"
             if path:
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                x.to_parquet(path + ".tmp", index=False)
-                os.replace(path + ".tmp", path)
-            how = "посчитаны"
+                _save(x, path)
         q = x.pop("_query").to_numpy()
         bounds = np.searchsorted(q, np.arange(len(block) + 1))   # строки запроса i — [bounds[i], bounds[i+1])
         frames = [x.iloc[bounds[i]:bounds[i + 1]].reset_index(drop=True) for i in range(len(block))]
-        pipe.res.log(f"{part}: признаки запросов {start + len(block)}/{len(results)} ({how}) "
-                     f"за {time.time() - t0:.0f} c")
+        done += len(block)
+        pipe.res.log(f"{part}: признаки запросов {done}/{len(results)} ({how}) за {time.time() - t0:.0f} c")
         yield frames, block
 
 

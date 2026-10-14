@@ -60,7 +60,8 @@ def trigrams(text: str) -> List[str]:
 
 class TrackTexts:
     """Поля треков для текстовых признаков: бинарные матрицы слов полей, хешированные биграммы текста песни
-    и 3-граммы названия / артиста. Пересечение с запросом — одно умножение разреженной матрицы."""
+    и 3-граммы названия / артиста. Хранятся по столбцам (CSC): пересечение с запросом — сумма нескольких столбцов
+    (слов запроса) по всем трекам, без разворота вектора запроса размером со словарь."""
 
     FIELDS = {"document_coverage": None, "title_coverage": ["m4a_song"], "artist_coverage": ["m4a_artist"],
               "tag_coverage": ["m4a_genres_full", "m4a_tags_full"], "lyrics_coverage": ["lyrics"]}
@@ -74,7 +75,7 @@ class TrackTexts:
         self.fields: Dict[str, sp.csr_matrix] = {}
         for name, cols in self.FIELDS.items():
             texts = docs.get("full") if cols is None else meta[cols].fillna("").astype(str).agg(" ".join, axis=1)
-            self.fields[name] = self.word_vectorizer.transform(texts).tocsr()
+            self.fields[name] = self.word_vectorizer.transform(texts).tocsc()
         self.lengths = {name: np.asarray(m.sum(axis=1)).ravel() for name, m in self.fields.items()}
         self.titles = np.array([normalize_query(t) for t in meta["m4a_song"].fillna("")], dtype=object)
         self.artists = np.array([normalize_query(t) for t in meta["m4a_artist"].fillna("")], dtype=object)
@@ -82,11 +83,18 @@ class TrackTexts:
                                              binary=True, norm=None, dtype=np.float32)
         self.trigram_hash = HashingVectorizer(analyzer=trigrams, n_features=HASH_FEATURES, alternate_sign=False,
                                               binary=True, norm=None, dtype=np.float32)
-        self.lyrics_bigrams = self.bigram_hash.transform(meta["lyrics"].fillna("").astype(str)).tocsr()
-        self.title_trigrams = self.trigram_hash.transform(self.titles).tocsr()
-        self.artist_trigrams = self.trigram_hash.transform(self.artists).tocsr()
+        self.lyrics_bigrams = self.bigram_hash.transform(meta["lyrics"].fillna("").astype(str)).tocsc()
+        self.title_trigrams = self.trigram_hash.transform(self.titles).tocsc()
+        self.artist_trigrams = self.trigram_hash.transform(self.artists).tocsc()
         self.title_trigram_len = np.array([len(trigrams(t)) for t in self.titles], dtype=np.float32)
         self.artist_trigram_len = np.array([len(trigrams(t)) for t in self.artists], dtype=np.float32)
+
+
+def hits(matrix: sp.csc_matrix, columns: np.ndarray) -> np.ndarray:
+    """Сколько из columns (слов / n-грамм запроса) есть у каждого трека: сумма этих столбцов бинарной матрицы."""
+    if not len(columns):
+        return np.zeros(matrix.shape[0], dtype=np.float32)
+    return np.asarray(matrix[:, columns].sum(axis=1), dtype=np.float32).ravel()
 
 
 # ---------------------------------------------------------------- признаки
@@ -111,6 +119,14 @@ class FeatureBuilder:
     @cached_property
     def texts(self) -> TrackTexts:
         return TrackTexts(self.res)
+
+    def warm(self) -> None:
+        """Загрузить заранее всё, что признаки берут лениво (тексты треков, индексы bm25 и tfidf): перед fork,
+        чтобы процессы-копии не строили их каждый заново."""
+        if "text" in self.groups:
+            _ = self.texts
+            for name in ("bm25", "tfidf"):
+                self.res.text_index(name, self.cfg["candgen"]["sources"].get(name, {}).get("index"))
 
     def build(self, ctx: Context, lists: Dict[str, Cands], sel: Selection) -> pd.DataFrame:
         """Строка на каждый трек sel.ids (в их порядке)."""
@@ -149,9 +165,9 @@ class FeatureBuilder:
         tx = self.texts
         query_words = set(words(query))
         n_words = max(len(query_words), 1)
-        q_vec = tx.word_vectorizer.transform([query]).T.tocsc()
+        q_words = tx.word_vectorizer.transform([query]).indices      # слова запроса, которые есть в словаре
         for name, matrix in tx.fields.items():
-            overlap = np.asarray((matrix[ids] @ q_vec).todense()).ravel()
+            overlap = hits(matrix, q_words)[ids]
             v[name] = overlap / n_words
             length = tx.lengths[name][ids]
             if name == "title_coverage":
@@ -164,14 +180,13 @@ class FeatureBuilder:
         text = f" {normalize_query(query)} "
         v["title_phrase_match"] = [float(bool(x) and f" {x} " in text) for x in tx.titles[ids]]
         v["artist_phrase_match"] = [float(bool(x) and f" {x} " in text) for x in tx.artists[ids]]
-        q_bigrams = tx.bigram_hash.transform([query]).T.tocsc()
-        v["lyrics_bigram_coverage"] = (np.asarray((tx.lyrics_bigrams[ids] @ q_bigrams).todense()).ravel()
-                                       / max(len(bigrams(query)), 1))
-        q_tri = tx.trigram_hash.transform([query]).T.tocsc()
+        q_bigrams = tx.bigram_hash.transform([query]).indices
+        v["lyrics_bigram_coverage"] = hits(tx.lyrics_bigrams, q_bigrams)[ids] / max(len(bigrams(query)), 1)
+        q_tri = tx.trigram_hash.transform([query]).indices
         n_tri = len(trigrams(query))
         for name, matrix, lengths in (("title_trigram_dice", tx.title_trigrams, tx.title_trigram_len),
                                       ("artist_trigram_dice", tx.artist_trigrams, tx.artist_trigram_len)):
-            common = np.asarray((matrix[ids] @ q_tri).todense()).ravel()
+            common = hits(matrix, q_tri)[ids]
             v[name] = 2 * common / np.maximum(n_tri + lengths[ids], 1)
 
     def _history(self, v, ctx, lists, sel, ids, ranks):
