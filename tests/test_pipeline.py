@@ -1,5 +1,6 @@
 """Пайплайн целиком: одна реплика (диалог) и прогон частей датасета (python -m recsys)."""
 import json
+import os
 
 import numpy as np
 
@@ -106,3 +107,23 @@ def test_features_cached_for_training_and_ranking(cfg, res):
     for r in chunk[:5]:
         direct = ranked.rank(r.ctx, r.lists, r.selection)
         assert (direct.top == r.top).all() and np.allclose(direct.scores, r.scores)
+
+
+def test_features_parallel_equal_serial(cfg, res, tmp_path, monkeypatch):
+    """Блоки признаков в нескольких процессах — те же числа, что последовательно; число процессов не в ключе кэша."""
+    from recsys import run
+    from recsys.config import deep_update
+    monkeypatch.setattr(run, "FEATURE_BLOCK", 7)
+    chunk = None
+    frames = {}
+    for workers in (1, 2):
+        c = deep_update(cfg, {"data": {"cache_dir": str(tmp_path / f"w{workers}")}, "features": {"workers": workers}})
+        pipe = Pipeline(c, res, load_model=False)
+        chunk = chunk or next(run.recommend_part(pipe, "valid", rank=False))[:30]
+        frames[workers] = [f for fr, _ in run.features_for(pipe, "valid", chunk) for f in fr]
+        n_blocks = (len(chunk) + 6) // 7
+        assert n_blocks >= 2 and len(list((tmp_path / f"w{workers}" / "features" / "valid").glob("*.parquet"))) == n_blocks
+    assert all(a.equals(b) for a, b in zip(frames[1], frames[2])) and len(frames[1]) == len(chunk)
+    p1 = run.feature_block_path(Pipeline(deep_update(cfg, {"features": {"workers": 1}}), res, load_model=False), "valid", chunk[:7])
+    p2 = run.feature_block_path(Pipeline(deep_update(cfg, {"features": {"workers": 8}}), res, load_model=False), "valid", chunk[:7])
+    assert os.path.basename(p1) == os.path.basename(p2)
