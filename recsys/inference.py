@@ -381,7 +381,10 @@ def export(cfg: Dict[str, Any], out: str, models: Dict[str, str], lookup: bool =
     for f in glob.glob(os.path.join(dcfg["cache_dir"], f"catalog_{res.dataset.source_key}_{dcfg.get('max_tags', 20)}.parquet*")):
         put(f, os.path.join("cache", os.path.basename(f)), "каталог")
     # текстовые индексы кандгенов и признаков (bm25, tfidf) — собранные на части index
-    for name in sorted(set(sources) & set(TEXT_INDEXES) | {"bm25", "tfidf"}):
+    needed = set(sources) & set(TEXT_INDEXES) | {"bm25", "tfidf"}
+    if cfg.get("summarizer", {}).get("resolve_entities"):   # распознаватель сущностей ищет по metadata_bm25
+        needed.add("metadata_bm25")
+    for name in sorted(needed):
         spec = cfg["candgen"]["sources"].get(name, {}).get("index")
         res.text_index(name, spec)
         key = index_key(name, {**TEXT_INDEXES[name], **(spec or {})}, res.dataset.source_key, dcfg["parts"])
