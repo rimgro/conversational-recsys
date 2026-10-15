@@ -12,6 +12,7 @@ except / avoid / hate / don't want»; в запросах о тексте пес
   - маркер текста песни раньше в клаузе («lyrics», «about», «goes», «says») — дальше содержание;
   - название трека важнее: «eyes without a face», «no buses» + arctic monkeys, «hear me no(w)» + hollywood undead;
   - «not too / so / very X» — мягкое ограничение: X не просим и не исключаем, только убираем из search_text.
+Опечатка в длинном слове отрицания («noting», «witout») — то же отрицание (_cue).
 Слово — и артист, и тег («nirvana», «queen», «rock»): артист, если большинство треков с этим тегом — его.
 Тег-прозвище («rhcp», «nin», «bowie»: ≥ 80% треков у одного артиста, без жанровых слов) — тоже артист.
 Опечатка в имени после отрицания («no nirnava») — summarizer.fuzzy_artists (по умолчанию выкл.), _typo_artist.
@@ -114,7 +115,7 @@ _NOVELTY_RE = re.compile(
     r"\bchange of pace\b|\bsurprise me\b|\bpalate cleanser\b", re.I)
 
 
-RULES_VERSION = "3"   # менять вместе с правилами: от разбора зависят кэши выдачи (text_query: positive) и признаков
+RULES_VERSION = "4"   # менять вместе с правилами: от разбора зависят кэши выдачи (text_query: positive) и признаков
 
 
 def rules_key(cfg: Dict[str, Any]) -> str:
@@ -131,7 +132,8 @@ _SOFT = frozenset("too so very overly that super".split())                   # �
 _GRAMMAR = frozenset("""i i'm im you you're youre we we're they they're he he's she she's it it's is are am was
 were be been being do does did will would can could should might may must i'll you'll we'll they'll won't can't
 cannot there there's that's who which""".split())                               # «you are not alone» — предложение
-_SENTENCE_CUES = frozenset("no not nothing none".split())                       # только им мешает грамматика
+_SENTENCE_CUES = frozenset("no not nothing none".split())
+_LONG_CUES = ("nothing", "without", "except", "exclude", "excluding", "dislike")   # опечатка в 1 букву — то же слово                       # только им мешает грамматика
 _LYRIC_MARKERS = frozenset("lyrics lyric about goes sings sang says said line lines words verse chorus phrase".split())
 
 
@@ -184,7 +186,8 @@ class RuleSummarizer(BaseSummarizer):
         self.fuzzy_artists = fuzzy_artists
         self.resolver = resolver          # recsys.entity.EntityResolver: фраза после отрицания -> артист по поиску
         self._by_len: Optional[Dict[int, List[str]]] = None   # длина имени -> нормализованные имена артистов
-        self._history_artists: set = set()                    # артисты истории текущего запроса (для опечаток)
+        self._history_artists: set = set()
+        self._common: Optional[set] = None                    # артисты истории текущего запроса (для опечаток)
 
     # ------------------------------------------------------------ разбор
 
@@ -238,7 +241,7 @@ class RuleSummarizer(BaseSummarizer):
         text = _INSTRUMENTAL_RE.sub("instrumental", text)
         protected = self._title_cues(tokenize(text))
         for clause in split_clauses(text):
-            toks = tokenize(clause)
+            toks = [self._cue(t) for t in tokenize(clause)]       # «noting like nirvana» -> nothing
             matches = self._match(toks)
             neg_at, soft = None, set()
             for i in range(len(toks)):
@@ -287,6 +290,23 @@ class RuleSummarizer(BaseSummarizer):
                     self._energy_mood(t, neg_at is not None and i > neg_at, state)
             kept += [t for i, t in enumerate(toks) if i not in drop]
         return kept
+
+    def _cue(self, tok: str) -> str:
+        """Опечатка в длинном слове отрицания («noting», «witout», «nothng») -> само слово; частые слова названий
+        и тегов не трогаем (это обычные слова, а не опечатки)."""
+        if tok in NEG_CUES or len(tok) < 5 or tok in STOPWORDS or tok in self._common_words():
+            return tok
+        return next((c for c in _LONG_CUES if abs(len(c) - len(tok)) <= 1 and _edit_distance(tok, c, 1) <= 1), tok)
+
+    def _common_words(self) -> set:
+        """Слова названий треков и тегов, встречающиеся ≥ 5 раз: обычные слова, а не опечатки."""
+        if self._common is None:
+            words: Dict[str, int] = {}
+            for text in list(self.catalog.df["title"]) + list(self.vocab):
+                for w in set(tokenize(text)):
+                    words[w] = words.get(w, 0) + 1
+            self._common = {w for w, c in words.items() if c >= 5}
+        return self._common
 
     @staticmethod
     def _negation(toks: List[str], i: int) -> Optional[str]:
@@ -373,12 +393,7 @@ class RuleSummarizer(BaseSummarizer):
             for key in self.artists:
                 self._by_len.setdefault(len(key), []).append(key)
             self._n_tracks = self.catalog.df["artist"].value_counts().to_dict()
-            words: Dict[str, int] = {}   # слова названий и тегов: частое — обычное слово, а не опечатка в имени
-            for text in list(self.catalog.df["title"]) + list(self.vocab):
-                for w in set(tokenize(text)):
-                    words[w] = words.get(w, 0) + 1
-            self._common = {w for w, c in words.items() if c >= 5}
-        if any(toks[i] in self._common for i in rest):    # «no matter», «no pity», «nothing back»
+        if any(toks[i] in self._common_words() for i in rest):    # «no matter», «no pity», «nothing back»
             return None
         phrase = " ".join(toks[rest[0]:rest[-1] + 1])
         if len(phrase) < 4:

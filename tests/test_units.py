@@ -257,3 +257,15 @@ def test_entity_resolver_votes_and_summarizer_hook():
     s.summarize(Request(dialog=[Message("user", "no nirvana")]))           # узнано правилами — поиск не нужен
     s.summarize(Request(dialog=[Message("user", "lyrics about no regrets")]))   # не отрицание
     assert asked == ["chilli pepers"]
+def test_negation_word_typos():
+    """«noting like nirvana», «witout» — опечатки в слове отрицания; обычные слова — нет."""
+    s = RuleSummarizer(_negation_catalog(), min_tag_count=1)
+
+    def run(q):
+        return s.summarize(Request(dialog=[Message("user", q)]))
+
+    assert run("noting like nirvana").exclude_artists == ["Nirvana"]
+    assert run("rock witout nirvana").exclude_artists == ["Nirvana"]
+    assert run("rock but nothng by metallica").exclude_artists == ["Metallica"]
+    out = run("something like nirvana")                   # «something» — не опечатка «nothing»
+    assert out.seed_artists == ["Nirvana"] and not out.exclude_artists
