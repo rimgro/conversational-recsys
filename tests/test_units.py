@@ -275,3 +275,17 @@ def test_discovery_metric():
     assert np.isclose(discovery(np.array([1, 9]), hist), w[1] / w.sum())        # новый на 2-м месте
     assert discovery(np.array([9, 1]), hist) > discovery(np.array([1, 9]), hist)  # новый выше — больше
     assert np.isnan(discovery(np.array([], dtype=int), hist))
+
+
+def test_negation_word_typos():
+    """«noting like nirvana», «witout» — опечатки в слове отрицания; обычные слова — нет."""
+    s = RuleSummarizer(_negation_catalog(), min_tag_count=1)
+
+    def run(q):
+        return s.summarize(Request(dialog=[Message("user", q)]))
+
+    assert run("noting like nirvana").exclude_artists == ["Nirvana"]
+    assert run("rock witout nirvana").exclude_artists == ["Nirvana"]
+    assert run("rock but nothng by metallica").exclude_artists == ["Metallica"]
+    out = run("something like nirvana")                   # «something» — не опечатка «nothing»
+    assert out.seed_artists == ["Nirvana"] and not out.exclude_artists
