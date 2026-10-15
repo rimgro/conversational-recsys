@@ -26,6 +26,7 @@ import pandas as pd
 import yaml
 
 from recsys import metrics
+from recsys.dialog import rules_key
 from recsys.pipeline import Pipeline, Result
 from recsys.ranker import CatBoostRanker, model_dir
 from recsys.resources import Resources
@@ -194,6 +195,7 @@ def feature_block_path(pipe: Pipeline, part: str, results: List[Result]) -> Opti
     deps = {"queries": [str(r.ctx.request.request_id) for r in results], "data": pipe.res.dataset.source_key,
             "candgens": [c.cache_key() for c in pipe.candgens], "selection": pipe.cfg["selection"],
             "features": {k: v for k, v in pipe.cfg["features"].items() if k != "workers"},   # число процессов
+            "rules": rules_key(pipe.cfg),                                       # разбор: фильтры отбора и search_text
             "v": FEATURES_VERSION}                                                              # на признаки не влияет
     key = hashlib.md5(json.dumps(deps, sort_keys=True, default=str).encode()).hexdigest()[:16]
     return os.path.join(cache_dir, "features", part.split("/")[0], f"{key}.parquet")

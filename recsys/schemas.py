@@ -65,6 +65,8 @@ class Request:
 class DialogSummary:
     text: str = ""                       # саммари на английском
     query: str = ""                      # короткий поисковый запрос для BM25 / HNSW
+    search_text: Optional[str] = None    # последняя реплика без исключённого («80s metal but no thrash» ->
+                                         # «80s metal»): текстовым кандгенам при candgen.text_query: positive
     include_tags: List[str] = field(default_factory=list)
     exclude_tags: List[str] = field(default_factory=list)
     seed_artists: List[str] = field(default_factory=list)

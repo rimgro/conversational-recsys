@@ -168,3 +168,98 @@ def test_rule_summarizer_fills_constraints(catalog):
     s = RuleSummarizer(catalog).summarize(Request(dialog=[Message("user", "80s synthpop in a minor key"),
                                                                Message("user", "actually make it major")]))
     assert s.constraints["mode"] == 1 and s.constraints["year_min"] == 1980  # позже сказанное перекрывает
+
+
+def _negation_catalog():
+    """Маленький каталог: артист-тег (nirvana), жанр-тег (rock) и названия с «no / without / don't»."""
+    import pandas as pd
+    from recsys.data.catalog import Catalog
+    rows = [("Nirvana", "Come as You Are", ["grunge", "rock", "nirvana"]),
+            ("Nirvana", "Lithium", ["grunge", "nirvana"]),
+            ("Nirvana", "Dumb", ["grunge", "nirvana"]),
+            ("Foo Fighters", "Everlong", ["rock", "nirvana"]),
+            ("Arctic Monkeys", "No Buses", ["indie rock", "rock"]),
+            ("Belinda Carlisle", "World Without You", ["pop", "80s"]),
+            ("Hollywood Undead", "Hear Me Now", ["rap rock", "rock"]),
+            ("Billy Idol", "Eyes Without a Face", ["80s", "rock"]),
+            ("Metallica", "One", ["thrash", "metal", "rock"]),
+            ("Metallica", "Fuel", ["thrash", "metal"]),
+            ("Dio", "Holy Diver", ["metal", "80s"]),
+            ("Rock", "Song", ["pop"]),
+            ("Daft Punk", "Around the World", ["electronic", "dance", "pop"]),
+            ("Massive Attack", "Teardrop", ["trip hop", "electronic", "sad"]),
+            ("Adele", "Hello", ["pop", "sad", "soul"]),
+            ("Eminem", "Lose Yourself", ["rap", "hip hop"]),
+            ("Kanye West", "Stronger", ["rap", "hip hop"])]
+    df = pd.DataFrame({"track_id": [f"t{i}" for i in range(len(rows))], "artist": [r[0] for r in rows],
+                       "title": [r[1] for r in rows], "tags": [r[2] for r in rows]})
+    return Catalog(df)
+
+
+def test_negation_rules():
+    """Исключается только распознанное отрицание; названия, текст песни и «not too X» — не исключения;
+    search_text — реплика без исключённого."""
+    s = RuleSummarizer(_negation_catalog(), min_tag_count=1)
+
+    def run(q):
+        return s.summarize(Request(dialog=[Message("user", q)]))
+
+    out = run("no nirvana")                       # и артист, и тег: тег почти только его -> артист
+    assert out.exclude_artists == ["Nirvana"] and not out.exclude_tags and out.search_text == ""
+    out = run("no rock!")                         # артист «Rock» есть, но тег rock не его -> жанр
+    assert out.exclude_tags == ["rock"] and not out.exclude_artists and out.search_text == ""
+    out = run("80s metal but no thrash")
+    assert out.exclude_tags == ["thrash"] and out.search_text == "80s metal"
+    out = run("i don't want rap, play some rock")
+    assert out.exclude_tags == ["rap"] and "rock" in out.include_tags
+    out = run("sad electronic but not too dance")   # мягко: не просим и не исключаем
+    assert not out.exclude_tags and "dance" not in out.include_tags and "dance" not in out.search_text.split()
+    for q in ("world without you belinda carlisle", "no buses arctic monkeys", "hear me no hollywood undead",
+              "play eyes without a face", "you are not alone in this sad life",
+              "lyrics about not being sad and no rock anymore"):
+        out = run(q)                              # название, предложение, текст песни
+        assert not out.exclude_tags and not out.exclude_artists, q
+        assert out.search_text == " ".join(__import__("recsys.text", fromlist=["tokenize"]).tokenize(q)), q
+    out = run("songs like lose yourself by eminem but from other artists, more rap")
+    assert out.exclude_artists == ["Eminem"] and "eminem" not in out.search_text and "rap" in out.search_text
+
+
+def test_fuzzy_artist_after_negation():
+    """summarizer.fuzzy_artists: опечатка в имени после отрицания; обычные слова и выключенная настройка — нет."""
+    from recsys.data.history import build_profile
+    from recsys.schemas import HistoryItem
+    catalog = _negation_catalog()
+    on, off = RuleSummarizer(catalog, min_tag_count=1, fuzzy_artists=True), RuleSummarizer(catalog, min_tag_count=1)
+
+    def run(s, q, profile=None):
+        return s.summarize(Request(dialog=[Message("user", q)]), profile)
+
+    out = run(on, "rock, but no nirnava")
+    assert out.exclude_artists == ["Nirvana"] and out.search_text == "rock"
+    assert run(on, "no metalica").exclude_artists == ["Metallica"]
+    assert not run(off, "rock, but no nirnava").exclude_artists          # по умолчанию выключено
+    assert not run(on, "no matter what").exclude_artists                  # нет похожего имени
+    assert not run(on, "no adel").exclude_artists                         # 4 буквы — только артисты истории
+    profile = build_profile([HistoryItem("t14", 1, 1)], catalog)          # Adele в истории
+    assert run(on, "no adel", profile).exclude_artists == ["Adele"]
+
+
+def test_entity_resolver_votes_and_summarizer_hook():
+    """Артист — если один источник уверен или два согласны; разбор спрашивает только нераспознанное после «no»."""
+    from types import SimpleNamespace
+    from recsys.entity import EntityResolver
+    r = EntityResolver.__new__(EntityResolver)
+    r.single, r.pair = 14, 8
+    assert r.decide({"bm25": ("A", 15), "lazy": ("B", 3)}) == "A"
+    assert r.decide({"bm25": ("A", 9), "lazy": ("A", 8), "v2": ("C", 2)}) == "A"
+    assert r.decide({"bm25": ("A", 9), "lazy": ("B", 9)}) is None
+    assert r.decide({"v2": ("Sade", 12)}) is None
+
+    asked = []
+    fake = SimpleNamespace(artist=lambda p: asked.append(p) or ("Red Hot Chili Peppers" if p == "chilli pepers" else None))
+    s = RuleSummarizer(_negation_catalog(), min_tag_count=1, resolver=fake)
+    out = s.summarize(Request(dialog=[Message("user", "rock, but no chilli pepers please")]))
+    assert out.exclude_artists == ["Red Hot Chili Peppers"] and out.search_text == "rock please"
+    s.summarize(Request(dialog=[Message("user", "no nirvana")]))           # узнано правилами — поиск не нужен
+    s.summarize(Request(dialog=[Message("user", "lyrics about no regrets")]))   # не отрицание
+    assert asked == ["chilli pepers"]

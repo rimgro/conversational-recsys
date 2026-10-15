@@ -145,7 +145,7 @@ class FeatureBuilder:
     # ------------------------------------------------------------ группы
 
     def _text(self, v, ctx, lists, sel, ids, ranks):
-        query = _query(ctx)
+        query = _query(ctx, self.cfg)
         bm25_index = self.res.text_index("bm25", self.cfg["candgen"]["sources"].get("bm25", {}).get("index"))
         tfidf_index = self.res.text_index("tfidf", self.cfg["candgen"]["sources"].get("tfidf", {}).get("index"))
         bm25 = bm25_index.scores(query)
@@ -343,6 +343,7 @@ def _rank_lookup(c: Cands, ids: np.ndarray, missing: int) -> np.ndarray:
     return out
 
 
-def _query(ctx: Context) -> str:
-    messages = ctx.request.user_messages
-    return messages[-1] if messages else ""
+def _query(ctx: Context, cfg: Dict[str, Any]) -> str:
+    """Текст запроса для текстовых признаков — тот же, что ищут текстовые кандгены (candgen.text_query)."""
+    from recsys.candgen.text import query_text, text_query_mode
+    return query_text(ctx, text_query_mode(cfg))

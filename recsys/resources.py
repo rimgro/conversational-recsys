@@ -21,6 +21,7 @@ class Resources:
         self._llm = llm
         self._text_indexes: Dict[Tuple[str, str], Any] = {}
         self._profiles: Dict[Tuple[Optional[str], Any], UserProfile] = {}
+        self.towers: Dict[str, Any] = {}   # плотные кандгены-башни пайплайна (Pipeline): ими пользуется entity.py
 
     def log(self, msg: str) -> None:
         if self.verbose:
@@ -44,7 +45,12 @@ class Resources:
     @cached_property
     def summarizer(self):
         from recsys.dialog import build_summarizer
-        return build_summarizer(self.cfg, self.catalog, self.llm)
+        scfg = self.cfg.get("summarizer", {})
+        resolver = None
+        if scfg.get("resolve_entities"):
+            from recsys.entity import EntityResolver
+            resolver = EntityResolver(self, scfg.get("resolve"))
+        return build_summarizer(self.cfg, self.catalog, self.llm, resolver)
 
     @cached_property
     def users(self) -> UserStates:

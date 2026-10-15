@@ -83,4 +83,6 @@ class AudioSeed(Candgen):
         return out
 
     def cache_key(self):
-        return {**super().cache_key(), "summarizer": self.res.cfg.get("summarizer", {}).get("type")}
+        from recsys.dialog import rules_key
+        return {**super().cache_key(), "summarizer": self.res.cfg.get("summarizer", {}).get("type"),
+                "rules": rules_key(self.res.cfg)}

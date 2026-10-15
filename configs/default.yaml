@@ -27,6 +27,8 @@ data:
 candgen:
   top_k: 1000                  # длина списка каждого кандгена (если у него не задано своё)
   batch_size: 256
+  text_query: raw              # что ищут текстовые кандгены и текстовые признаки: raw — последняя реплика как есть;
+                               # positive — она же без исключённого разбором («80s metal but no thrash» -> «80s metal»)
   sources:                     # enabled: false — кандген не считается и не попадает ни в отбор, ни в признаки;
                                # features: false — участвует в отборе, но не в признаках ранкера (обучен на всём train)
     # тексты (recsys/candgen/text.py): индексы по документам трека, как у team1
@@ -130,6 +132,10 @@ llm:
 summarizer:                    # разбор запроса -> DialogSummary (recsys/dialog.py): нужен card_bm25, relisten,
   type: rule                   # audio_seed и фильтрам; rule | llm (фолбэк на rule)
   min_tag_count: 2
+  fuzzy_artists: false        # опечатка в имени артиста после отрицания («no nirnava» -> Nirvana)
+  resolve_entities: false     # фраза после отрицания, которую не узнали правила, ищется отдельно (BM25 по метаданным
+                              # и башни): артист, если источники согласны («no rhcp»; recsys/entity.py)
+  resolve: {k: 20, single: 14, pair: 8}   # топ-k; один источник ≥ single из k или два ≥ pair — артист
 
 explainer:
   type: template               # template (по метаданным и истории, как сабмит team1) | stub (список) | llm

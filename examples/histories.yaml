@@ -1,6 +1,12 @@
 # Истории для python -m recsys.inference chat --history <имя>. Трек — «артист название» (достаточно части слов;
 # из подходящих берётся самый популярный) или m4a_id. Порядок — от старых к новым: последний слушали вчера.
 
+nirvana:
+  - smells like teen spirit
+  - rape me
+  - come as you are
+  - heart-shaped box
+  
 britpop:
   - blur song 2
   - oasis wonderwall

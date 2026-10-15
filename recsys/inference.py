@@ -128,6 +128,9 @@ class Recommender:
         self.pipe.features.warm()
         for cg in self.pipe.candgens:
             cg.warm()
+        resolver = getattr(self.res.summarizer, "resolver", None)
+        if resolver is not None:                 # распознаватель сущностей: индекс и модели башен — сейчас
+            resolver.artist("red hot chili peppers")
         tracks = list(self.res.catalog.track_ids[:3])
         with warnings.catch_warnings():   # без векторов в файлах (online: false) пробный запрос даст пустые списки
             warnings.simplefilter("ignore")

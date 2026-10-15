@@ -46,6 +46,7 @@ class Pipeline:
         self.cfg = cfg
         self.res = res or Resources(cfg)
         self.candgens = build_candgens(cfg, self.res)
+        self.res.towers.update({c.name: c for c in self.candgens if c.name in ("twotower", "twotower_lazy")})
         self.sources = [c.name for c in self.candgens]
         self.selector = Selector(cfg, self.res.catalog, self.sources)
         self.features = FeatureBuilder(cfg, self.res, self.sources)

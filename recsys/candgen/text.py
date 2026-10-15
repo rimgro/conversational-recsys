@@ -195,24 +195,43 @@ def load_text_index(name: str, spec: Dict[str, Any], res, log=print):
 # ---------------------------------------------------------------- кандгены
 
 class _TextCandgen(Candgen):
-    """Поиск по последней реплике в индексе с тем же именем, что у кандгена."""
+    """Поиск по последней реплике (или по ней без исключённого — candgen.text_query) в индексе с тем же именем."""
 
     @property
     def index(self):
         return self.res.text_index(self.name, self.cfg.get("index"))
 
     def retrieve(self, batch: List[Context]) -> List[Cands]:
-        return self.index.search([query_text(ctx) for ctx in batch], self.top_k)
+        mode = text_query_mode(self.res.cfg)
+        return self.index.search([query_text(ctx, mode) for ctx in batch], self.top_k)
 
     def cache_key(self) -> Dict[str, Any]:
         key = super().cache_key()
         spec = {**TEXT_INDEXES[self.name], **(self.cfg.get("index") or {})}
         key["index"] = index_key(self.name, spec, self.res.dataset.source_key, self.res.cfg["data"]["parts"])
+        key.update(text_query_key(self.res.cfg))
         return key
 
 
-def query_text(ctx: Context) -> str:
-    """Текст для текстового поиска: последняя реплика пользователя."""
+def text_query_mode(cfg: Dict[str, Any]) -> str:
+    mode = cfg["candgen"].get("text_query", "raw")
+    if mode not in ("raw", "positive"):
+        raise ValueError(f"candgen.text_query: raw | positive, а не {mode}")
+    return mode
+
+
+def text_query_key(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """В ключ кэша: positive зависит от правил разбора (dialog.rules_key); raw — как раньше (ключи старых
+    прогонов не меняются)."""
+    from recsys.dialog import rules_key
+    return {} if text_query_mode(cfg) == "raw" else {"text_query": "positive", "rules": rules_key(cfg)}
+
+
+def query_text(ctx: Context, mode: str = "raw") -> str:
+    """Текст для текстового поиска: последняя реплика пользователя; positive — она же без исключённого и мягко
+    отрицаемого (DialogSummary.search_text: «80s metal but no thrash» -> «80s metal», «no nirvana» -> '')."""
+    if mode == "positive" and ctx.summary is not None and ctx.summary.search_text is not None:
+        return ctx.summary.search_text
     messages = ctx.request.user_messages
     return messages[-1] if messages else ""
 
