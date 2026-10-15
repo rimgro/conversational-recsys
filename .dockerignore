@@ -1,0 +1,4 @@
+serving
+dist
+.venv
+**/__pycache__

@@ -57,3 +57,7 @@ venv/
 
 # прогоны python -m recsys: модели, отчёты, сабмиты
 /runs/
+
+# папка модели (python -m recsys.inference export) и архив для сервера — не в git
+/serving/
+/dist/
