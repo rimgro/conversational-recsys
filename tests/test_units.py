@@ -263,3 +263,15 @@ def test_entity_resolver_votes_and_summarizer_hook():
     s.summarize(Request(dialog=[Message("user", "no nirvana")]))           # узнано правилами — поиск не нужен
     s.summarize(Request(dialog=[Message("user", "lyrics about no regrets")]))   # не отрицание
     assert asked == ["chilli pepers"]
+
+
+def test_discovery_metric():
+    """Discovery@k = Σ w_r·new_r / Σ w_r, w_r = 1 / log2(r + 1): верх весит больше."""
+    import numpy as np
+    from recsys.metrics import discovery
+    hist = np.array([1, 2])
+    assert discovery(np.array([3, 4, 5]), hist) == 1.0 and discovery(np.array([1, 2]), hist) == 0.0
+    w = 1 / np.log2(np.arange(2, 4))
+    assert np.isclose(discovery(np.array([1, 9]), hist), w[1] / w.sum())        # новый на 2-м месте
+    assert discovery(np.array([9, 1]), hist) > discovery(np.array([1, 9]), hist)  # новый выше — больше
+    assert np.isnan(discovery(np.array([], dtype=int), hist))

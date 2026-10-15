@@ -1,0 +1,20 @@
+# Итоговый набор из 6 кандгенов: bm25, history, башни v2, lazy и Павла, audio_seed (MuQ-соседи образца «like X by Y»
+# из текста запроса — только по треку-образцу); все голосуют с силой 1, ранги — признаки CatBoost; фильтры исключений.
+#   python -m recsys run --run final6 --sources bm25,history,twotower,twotower_lazy,twotower_pavel,audio_seed \
+#     --config configs/final6.yaml --parts valid,test
+# Онлайн (recsys/inference.py): башни — online: true; Павел — его экспорт в artifacts/twotower_pavel/bundle.
+
+candgen:
+  sources:
+    twotower:       {enabled: true, features: true}
+    twotower_lazy:  {enabled: true, features: true}
+    twotower_pavel: {enabled: true, features: true, bundle: artifacts/twotower_pavel/bundle}
+    audio_seed:     {enabled: true, from_artists: false}
+
+selection:
+  weights: {bm25: 1, history: 1, twotower: 1, twotower_lazy: 1, twotower_pavel: 1, audio_seed: 1}
+  filters: [banned, exclude_artist, exclude_tag, new_artist]
+
+ranker:
+  catboost:
+    iterations: 1000

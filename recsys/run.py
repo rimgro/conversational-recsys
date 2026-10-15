@@ -108,7 +108,7 @@ def report(cfg: Dict[str, Any], pipe: Pipeline, per: pd.DataFrame, part: str) ->
     lists = metrics.summary(per, recall_at, k)
     lists.to_csv(os.path.join(out_dir, "lists.csv"))
     tables = {}
-    for metric in ("recall", f"recall@{limit}", f"ndcg@{k}"):
+    for metric in ("recall", f"recall@{limit}", f"ndcg@{k}", f"discovery@{k}"):
         tables[metric] = metrics.by_type(per, metric, k, recall_at)
         tables[metric].to_csv(os.path.join(out_dir, f"{metric.replace('@', '_at_')}_by_type.csv"))
     losses = metrics.filter_losses(per)
@@ -116,6 +116,7 @@ def report(cfg: Dict[str, Any], pipe: Pipeline, per: pd.DataFrame, part: str) ->
         "part": part, "queries": int(per["request_id"].nunique()),
         "candgens": pipe.sources, "ranker": cfg["ranker"]["type"],
         f"ndcg@{k}": _get(lists, "ranker", f"ndcg@{k}"), f"hit@{k}": _get(lists, "ranker", f"hit@{k}"),
+        f"discovery@{k}": _get(lists, "ranker", f"discovery@{k}"),
         f"stub_ndcg@{k}": _get(lists, "selection", f"ndcg@{k}"),
         f"recall@{limit}": _get(lists, "selection", "recall"), "recall_union": _get(lists, "union", "recall"),
         "filter_losses": {f: round(float(v), 4) for f, v in losses.items()},
@@ -136,10 +137,12 @@ def _get(table: pd.DataFrame, row: str, col: str) -> Optional[float]:
 
 
 def render_report(main, lists, tables, k, limit, recall_at, losses) -> str:
-    cols = [f"recall@{n}" for n in recall_at] + ["recall", "only_this", f"ndcg@{k}", "median_rank", "mean_len"]
+    cols = [f"recall@{n}" for n in recall_at] + ["recall", "only_this", f"ndcg@{k}", f"discovery@{k}", "median_rank",
+                                                 "mean_len"]
     lines = [f"# {main['part']}: {main['queries']} запросов", ""]
     if main[f"ndcg@{k}"] is not None:
-        lines.append(f"**Ранкер ({main['ranker']}) nDCG@{k} = {main[f'ndcg@{k}']:.4f}**, hit@{k} = {main[f'hit@{k}']:.4f}; "
+        lines.append(f"**Ранкер ({main['ranker']}) nDCG@{k} = {main[f'ndcg@{k}']:.4f}**, hit@{k} = {main[f'hit@{k}']:.4f}, "
+                     f"Discovery@{k} = {main[f'discovery@{k}']:.4f}; "
                      f"порядок отбора (stub) nDCG@{k} = {main[f'stub_ndcg@{k}']:.4f}")
     lines += [f"Отбор: recall@{limit} = {main[f'recall@{limit}']:.4f}; все кандгены вместе: recall = "
               f"{main['recall_union']:.4f}"]
@@ -148,7 +151,8 @@ def render_report(main, lists, tables, k, limit, recall_at, losses) -> str:
     lines.append("")
     lines += ["## Списки", "", "recall@N — цель в первых N; recall — где угодно; only_this — нашёл только этот кандген; "
               f"nDCG@{k} — если бы выдачей был этот список как есть.", "", _md(lists[cols]), ""]
-    for metric, title in ((f"ndcg@{k}", f"nDCG@{k} по типам запросов"), ("recall", "recall по типам запросов")):
+    for metric, title in ((f"ndcg@{k}", f"nDCG@{k} по типам запросов"), ("recall", "recall по типам запросов"),
+                          (f"discovery@{k}", f"Discovery@{k} (новое для пользователя) по типам запросов")):
         lines += [f"## {title}", "", _md(tables[metric]), ""]
     if len(losses):
         lines += ["## Цель выкинул фильтр отбора (доля запросов)", "", _md(losses.to_frame("share")), ""]

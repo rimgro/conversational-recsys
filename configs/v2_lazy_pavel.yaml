@@ -1,0 +1,23 @@
+# Пять кандгенов: bm25, history и три башни — v2, lazy и башня Павла (честные списки, без утечки similar_to);
+# все голосуют с силой 1, ранги башен в признаках CatBoost, фильтры исключений по разбору запроса.
+#   python -m recsys run --run v2_lazy_pavel --sources bm25,history,twotower,twotower_lazy,twotower_pavel \
+#     --config configs/v2_lazy_pavel.yaml --parts valid,test
+# Обучение и оценка — по готовым спискам Павла (artifacts/twotower_pavel/*_top200.parquet, по query_id), онлайн
+# (recsys/inference.py) — его моделью: --set candgen.sources.twotower_pavel.online=true; экспорт модели —
+# artifacts/twotower_pavel/bundle (config.json, tokenizer/, query_trainable.pt, history_features.npz, catalog.json,
+# track_vectors.npy). Онлайн-списки на CPU совпадают с готовыми на 98.9% top-200 (fp32 и точный поиск против bf16
+# и HNSW).
+
+candgen:
+  sources:
+    twotower:       {enabled: true, features: true}
+    twotower_lazy:  {enabled: true, features: true}
+    twotower_pavel: {enabled: true, features: true, bundle: artifacts/twotower_pavel/bundle}
+
+selection:
+  weights: {bm25: 1, history: 1, twotower: 1, twotower_lazy: 1, twotower_pavel: 1}
+  filters: [banned, exclude_artist, exclude_tag, new_artist]
+
+ranker:
+  catboost:
+    iterations: 1000

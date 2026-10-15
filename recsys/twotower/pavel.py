@@ -192,7 +192,9 @@ class PavelTower:
         """top-k (m4a_id, косинус) точным поиском; пустой запрос — пусто (так у Павла: запрос обязателен)."""
         if not query.strip():
             return [], np.zeros(0, dtype=np.float32)
-        scores = self.vectors @ self.encode(query, history)
+        u = self.encode(query, history)
+        with np.errstate(all="ignore"):   # numpy 2.0 + Accelerate (macOS) даёт ложные warnings в matmul
+            scores = self.vectors @ u
         order = np.argsort(-scores, kind="stable")
         _, first = np.unique(self.group[order], return_index=True)   # первая (лучшая) запись каждой группы
         order = order[np.sort(first)][:k]

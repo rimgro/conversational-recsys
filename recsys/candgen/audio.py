@@ -2,8 +2,8 @@
 
   audio_taste   центр истории с весом count                             (team1)
   audio_recent  центр истории с весом log1p(count) * 2^(-дней / 30)     (team1)
-  audio_seed    образец из запроса: трек «like X by Y» (similar_to), иначе треки названных артистов и лайки;
-                без образца — пусто (вкус покрывают audio_taste / audio_recent)
+  audio_seed    образец из запроса: трек «like X by Y» (similar_to), иначе треки названных артистов и лайки
+                (from_artists: false — только трек «like X by Y»); без образца — пусто
 """
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ class AudioSeed(Candgen):
     def seeds(self, ctx: Context) -> np.ndarray:
         catalog = self.res.catalog
         tracks = catalog.positions(ctx.summary.seed_track_ids)
-        if len(tracks):
+        if len(tracks) or not self.cfg.get("from_artists", True):   # from_artists: false — только «like X by Y»
             return tracks
         extra = list(catalog.positions(ctx.request.liked_ids))
         names = {a.lower() for a in ctx.summary.seed_artists}

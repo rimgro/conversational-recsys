@@ -57,14 +57,26 @@ class TargetView:
         return float(hit[0] + 1) if len(hit) else float("nan")
 
 
+def discovery(ids: np.ndarray, history: np.ndarray, k: int = 20) -> float:
+    """Доля новых треков в первых k с весом 1 / log2(r + 1): Σ w_r·new_r / Σ w_r (история — всё до начала окна).
+    Знаменатель — по позициям, которые есть в списке (короче k — нормируется на его длину)."""
+    top = ids[:k]
+    if not len(top):
+        return float("nan")
+    w = 1.0 / np.log2(np.arange(2, len(top) + 2))
+    return float((w * ~np.isin(top, history)).sum() / w.sum())
+
+
 def per_list(results: List[Result], selector, k: int = 20) -> pd.DataFrame:
-    """Строка = запрос × список: место цели (rank), длина списка (n), nDCG@k, каким фильтром выкинута цель."""
+    """Строка = запрос × список: место цели (rank), длина списка (n), nDCG@k, Discovery@k (новое для пользователя
+    в первых k), каким фильтром выкинута цель."""
     view = TargetView(selector.catalog)
     rows = []
     for r in results:
         req = r.ctx.request
         if not req.target_ids:
             continue
+        history = selector.catalog.positions(h.track_id for h in req.history)
         base = {"request_id": req.request_id, "query_type": req.meta.get("query_type"),
                 "is_new": req.meta.get("is_new")}
         lists = {name: c.ids for name, c in r.lists.items()}
@@ -80,6 +92,7 @@ def per_list(results: List[Result], selector, k: int = 20) -> pd.DataFrame:
             rank = view.rank(req, ids)
             rows.append({**base, "list": name, "n": len(ids), "rank": rank,
                          f"ndcg@{k}": 1.0 / np.log2(rank + 1) if rank <= k else 0.0,
+                         f"discovery@{k}": discovery(ids, history, k),
                          "filtered_by": removed_by if name == "selection" else None})
     return pd.DataFrame(rows)
 
@@ -100,7 +113,8 @@ def summary(per: pd.DataFrame, recall_at: Sequence[int], k: int = 20, by: Option
     keys = ([by] if by else []) + ["list"]
     return df.groupby(keys, sort=False).agg(
         queries=("request_id", "size"),
-        **{f"ndcg@{k}": (f"ndcg@{k}", "mean"), f"hit@{k}": (f"hit@{k}", "mean"), f"mrr@{k}": (f"mrr@{k}", "mean")},
+        **{f"ndcg@{k}": (f"ndcg@{k}", "mean"), f"hit@{k}": (f"hit@{k}", "mean"), f"mrr@{k}": (f"mrr@{k}", "mean"),
+           f"discovery@{k}": (f"discovery@{k}", "mean")},
         **{f"recall@{n}": (f"recall@{n}", "mean") for n in recall_at},
         recall=("found", "mean"),
         only_this=("only_this", "mean"),
